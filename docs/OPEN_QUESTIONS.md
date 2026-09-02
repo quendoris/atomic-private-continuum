@@ -16,14 +16,15 @@ These questions are intentionally unresolved. They must be answered by analysis,
 
 ## Native container encoding
 
-- Physical encoding of a native `.apc` object.
-- Indexing required for large continua without full-file scans.
-- Whether native export is a single physical file with an internal indexed container, and how that container supports incremental durable writes.
+- Physical encoding of the single native `.apc` file.
+- Internal indexing required for large continua without full-file scans.
+- Incremental durable update strategy for the single-file container.
 - Integrity structure for partial reads and corruption detection.
+- Internal layout that permits efficient access to very large attachments while preserving one native file.
 
 ## Attachments
 
-- Chunk size policy and content-addressing strategy.
+- Chunk size policy inside the native container.
 - Deduplication boundaries and privacy consequences.
 - Random access, lazy verification and streaming decryption.
 - Behavior for multi-gigabyte and larger attachments.
@@ -37,12 +38,12 @@ These questions are intentionally unresolved. They must be answered by analysis,
 - Revocation model if A.P.C.-level authorization is later added.
 - Key backup/transfer through explicit user-controlled mechanisms such as QR or offline transfer without creating a recovery authority.
 
-## Synchronization transport
+## GitHub synchronization
 
-- Efficient Git/GitHub representation for very large continua.
-- Whether one repository file is practical at target scales or whether the Git adapter requires an opaque segmented transport representation.
+- Efficient transfer/update strategy for one encrypted `.apc` repository file at large scales.
 - Publication retry and remote revision protocol.
-- Garbage collection of superseded transport objects if segmented transport is used.
+- Whether Git or an auxiliary transfer mechanism can avoid unnecessary full-file network transfer while the repository still exposes one synchronized native file.
+- Practical GitHub size constraints and the point at which a different transport is required without changing A.P.C. format semantics.
 
 ## Durability
 
