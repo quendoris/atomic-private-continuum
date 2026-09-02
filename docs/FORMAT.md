@@ -2,13 +2,15 @@
 
 This document records format-level decisions that are sufficiently stable to constrain implementation. Exact binary encoding, cryptographic algorithms and merge structures are intentionally not fixed yet.
 
-## 1. Logical object
+## 1. Native object
 
-An A.P.C. continuum is one logical portable object.
+An A.P.C. continuum is one portable native object.
 
-A user MAY export it as one native A.P.C. file. Transport adapters MAY represent the same logical object differently for efficient synchronization, provided that representation is lossless and does not change A.P.C. semantics.
+The native representation MUST be self-contained and exportable as one `.apc` file. The same native object is also the unit stored by the initial GitHub synchronization transport.
 
-Transport representation is not the A.P.C. format.
+Internal indexing, chunk tables, attachment regions or other structures may exist inside that single file. They do not change the one-object model.
+
+The format must therefore support efficient partial access and incremental update without treating the continuum as one semantically monolithic value.
 
 ## 2. Atoms
 
@@ -78,7 +80,7 @@ Binary attachments are first-class content referenced by atoms.
 
 The logical model MUST support attachments larger than available RAM and MUST permit lazy access.
 
-A large attachment may be represented internally by an encrypted manifest and independently addressable encrypted chunks. The exact chunking scheme is not fixed yet.
+A large attachment may be represented inside the native object by an encrypted manifest and independently addressable encrypted chunks or regions. The exact internal chunking scheme is not fixed yet.
 
 A PDF, image or other attachment does not change the surrounding atom model. Notes may exist before, after or structurally adjacent to the attachment without embedding editor-specific layout into the portable format.
 
