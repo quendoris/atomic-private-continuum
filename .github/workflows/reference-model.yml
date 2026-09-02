@@ -1,0 +1,27 @@
+name: reference-model
+
+on:
+  push:
+    paths:
+      - "reference_model/**"
+      - "tests/**"
+      - ".github/workflows/reference-model.yml"
+  pull_request:
+    paths:
+      - "reference_model/**"
+      - "tests/**"
+      - ".github/workflows/reference-model.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  logical-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run reference-model tests
+        run: python -m unittest discover -s tests -v
