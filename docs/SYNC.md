@@ -92,3 +92,125 @@ A temporary synchronization failure MUST NOT block local editing.
 Pending local changes must remain durable locally and may be synchronized later.
 
 A failed or interrupted synchronization must never replace a valid local state with an unvalidated remote state.
+
+## 9. Runtime model: foreground only
+
+The Android implementation does not require a daemon, Android foreground service, WorkManager job, alarm, or persistent background worker for normal interactive synchronization.
+
+While at least one A.P.C. activity is visible/foreground, an in-process `SyncSession` may run as ordinary application work:
+
+```text
+application enters foreground
+        |
+        +-- immediate remote-head check
+        |
+        +-- start foreground sync loop
+        |
+        +-- local edits remain immediately durable locally
+        |
+        +-- publish coalesced local changes
+        |
+        +-- detect remote revisions
+        |      |
+        |      +-- fetch .apc only after remote head changes
+        |      +-- validate/decrypt/merge
+        |      +-- update visible state
+        |
+application leaves foreground
+        |
+        +-- cancel polling, timers and network sync work
+```
+
+When the application returns to the foreground it performs an immediate catch-up check and resumes the loop.
+
+No correctness property may depend on the loop continuing while the application is in the background. The operating system is free to suspend or kill the process after A.P.C. leaves the foreground.
+
+Desktop implementations should use the same semantic model: synchronization is an ordinary part of the running application process, not a mandatory system daemon.
+
+## 10. GitHub change detection
+
+GitHub does not provide a direct realtime subscription to a repository branch for an arbitrary foreground phone client without introducing an externally reachable webhook receiver or relay.
+
+The first GitHub adapter therefore uses efficient foreground polling.
+
+The polling request MUST NOT download the native `.apc` file on every cycle. It should first query only a small transport revision marker, such as the current branch/ref/commit identity.
+
+Conceptually:
+
+```text
+poll remote HEAD/ref
+        |
+        +-- unchanged -> do nothing
+        |
+        +-- changed
+               |
+               +-- fetch encrypted .apc
+               +-- merge locally
+               +-- render new state
+```
+
+Authenticated conditional HTTP requests with `ETag` / `If-None-Match` should be used where supported. An unchanged `304 Not Modified` response avoids unnecessary payload transfer and, under GitHub's documented rules for correctly authenticated conditional REST requests, does not consume the primary REST rate-limit budget.
+
+Polling still has to respect GitHub secondary limits and any endpoint-specific `x-poll-interval` guidance. The adapter must apply backoff on `403`, `429`, `retry-after`, or other explicit rate-limit responses.
+
+## 11. Interactive publication cadence
+
+A.P.C. must not translate every keystroke into a GitHub commit.
+
+Local durability and remote publication are separate boundaries:
+
+```text
+user edit
+   |
+   +-- durable local commit        immediate
+   |
+   +-- pending sync state          immediate
+   |
+   +-- GitHub publication          coalesced
+```
+
+The foreground adapter should coalesce nearby changes and publish at semantic/idle boundaries. Discrete edits can therefore become visible remotely quickly, while sustained typing is transmitted in batches rather than as hundreds of repository mutations.
+
+The exact cadence is an implementation parameter and must be measured experimentally. Initial experiments should evaluate an adaptive policy roughly in this family:
+
+- immediate or near-immediate publication after a short idle boundary;
+- a minimum spacing between mutating GitHub requests;
+- longer batching during sustained continuous input;
+- immediate remote-head checks after a successful local publication race/retry;
+- adaptive slowdown when rate-limit headers or network conditions require it.
+
+GitHub currently recommends serial API requests, at least a short pause between mutative REST requests, and imposes secondary limits on content-generating operations. For that reason, sub-keystroke GitHub publication is explicitly not a design goal.
+
+## 12. Expected interactive latency
+
+GitHub synchronization is intended to feel automatic, not to pretend to be a sub-100-ms realtime collaboration channel.
+
+When two phones have A.P.C. open in the foreground, the expected path is:
+
+```text
+phone A local edit
+      |
+      +-- local durable state
+      +-- coalesced publish
+                |
+              GitHub
+                |
+      phone B foreground poll notices new revision
+                |
+      fetch -> merge -> render
+```
+
+The first practical target is **seconds-scale propagation** for discrete edits while both applications are open. Exact latency is not specified before measurement because it depends on publication batching, poll cadence, network RTT, GitHub processing time, `.apc` size and merge cost.
+
+A dedicated two-device synchronization experiment must record at least:
+
+- local-edit to successful-publication latency;
+- publication to remote-detection latency;
+- remote-detection to merged-render latency;
+- total end-to-end latency;
+- bytes transferred for unchanged polls and changed states;
+- GitHub request counts and rate-limit headers;
+- behavior under simultaneous publication races;
+- behavior under sustained typing rather than isolated edits.
+
+If a future transport needs sub-second collaboration, it may provide a push or direct peer channel without changing A.P.C. merge semantics or the native format. GitHub remains a valid durable synchronization transport even if another adapter later provides a faster live channel.
