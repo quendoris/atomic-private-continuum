@@ -113,8 +113,10 @@ class ExactCoverageCheckpointTests(unittest.TestCase):
         compact = compact.compact()
         second = compact.metrics()
         self.assertEqual(second.retained_revision_count, 1)
-        self.assertEqual(second.covered_id_count, 510)
-        self.assertEqual(second.exact_coverage_payload_bytes_at_256_bits, 510 * 32)
+        # 255 already covered + the previously retained frontier + 255 newly
+        # dominated revisions = 511 covered opaque IDs.
+        self.assertEqual(second.covered_id_count, 511)
+        self.assertEqual(second.exact_coverage_payload_bytes_at_256_bits, 511 * 32)
 
     def test_dropping_coverage_makes_stale_branch_parent_unverifiable(self) -> None:
         current = self.linear(100)
