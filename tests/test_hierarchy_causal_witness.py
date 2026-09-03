@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+from reference_model.apc_model import ModelError
 from reference_model.hierarchy_bounded_lab import (
     previous_parent_witnesses,
     resolve_with_one_witness_fallback,
+    resolve_with_root_fallback,
 )
 from reference_model.hierarchy_lab import HierarchyLab
 from reference_model.hierarchy_torture_lab import resolve_acyclic_with_metrics
@@ -59,6 +61,39 @@ class HierarchyCausalWitnessTests(unittest.TestCase):
         self.assertEqual(full.resolved.active_parents[b], r)
         self.assertEqual(one.active_parents[b], p)
         self.assertEqual(one.fallback_modes[b], "witness")
+
+    def test_full_history_can_exhaust_all_placements_while_bounded_policy_is_total(self) -> None:
+        """Every historical parent of B can become invalid after merge.
+
+        The current B -> Q placement is invalidated by Q -> B. Full-history then
+        falls back to B -> P, but P -> B invalidates that foundational placement
+        too. Rejecting it leaves no placement revision for B and the historical
+        resolver has no defined result. One-witness instead tries P once and then
+        takes its explicit safe root fallback.
+        """
+
+        b, p, q = hid(20), hid(21), hid(22)
+
+        base = HierarchyLab()
+        base = base.place(atom_id=p, revision_id=hid(800), parent_atom_id=None)
+        base = base.place(atom_id=q, revision_id=hid(900), parent_atom_id=None)
+        base = base.place(atom_id=b, revision_id=hid(100), parent_atom_id=p)
+
+        current = base.place(atom_id=b, revision_id=hid(200), parent_atom_id=q)
+        p_back = base.place(atom_id=p, revision_id=hid(8_000), parent_atom_id=b)
+        q_back = base.place(atom_id=q, revision_id=hid(9_000), parent_atom_id=b)
+        merged = current.merge(p_back).merge(q_back)
+
+        with self.assertRaisesRegex(ModelError, "exhausted every placement"):
+            resolve_acyclic_with_metrics(merged)
+
+        one = resolve_with_one_witness_fallback(merged)
+        root = resolve_with_root_fallback(merged)
+
+        self.assertIsNone(one.active_parents[b])
+        self.assertEqual(one.fallback_modes[b], "root")
+        self.assertEqual(one.metrics.max_fallback_steps_per_atom, 2)
+        self.assertIsNone(root.active_parents[b])
 
     def test_causal_witness_is_stable_under_merge_order(self) -> None:
         b, p, q, r = hid(10), hid(11), hid(12), hid(13)
