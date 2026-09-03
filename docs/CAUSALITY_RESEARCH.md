@@ -2,7 +2,7 @@
 
 Status: active research. This document records executable causal-metadata experiments. It does not freeze the portable format.
 
-Executable cases live in `tests/test_causality_lab.py` and use `reference_model/causality_lab.py`.
+Executable cases live in `tests/test_causality_lab.py` and use `reference_model/causality_lab.py`. Causal-node compaction experiments continue in `CHECKPOINT_RESEARCH.md`, `tests/test_checkpoint_lab.py` and `reference_model/checkpoint_lab.py`.
 
 ## 1. Constraint
 
@@ -182,33 +182,37 @@ This gives the sync layer a clean rule:
 
 A future sync inbox may buffer such a capsule until dependencies arrive. Transport arrival order still does not become semantic order.
 
-## 9. What this does not solve
+## 9. Causal-node compaction result
 
-The current candidate retains the complete direct-parent DAG forever. Therefore total causal-node count still grows with edit history.
+The first executable checkpoint pass is documented in `CHECKPOINT_RESEARCH.md`.
 
-That is better than quadratic ancestor sets but it is still not the desired final state for a continuum edited for years.
+It establishes three useful boundaries for the current ID-only model:
 
-The remaining problem is safe causal compaction.
+1. dominated historical causal node bodies can be removed from the hot DAG while exact covered-ID membership still permits tested long-offline branches to reconnect;
+2. the logical frontier revision IDs themselves cannot be replaced by arbitrary fresh checkpoint IDs because that can change deterministic concurrent scalar winners;
+3. if both old nodes and all knowledge that their IDs were covered are discarded, a returning branch with an old parent becomes unverifiable and must be rejected rather than ordered by guesswork.
 
-Compaction cannot simply delete old nodes because a long-offline replica may later present state whose relationship to the retained frontier depends on those nodes.
+The experiment therefore moves the open problem from generic "delete old DAG nodes" to a more precise question:
 
-A production solution needs a way to replace old causal subgraphs with a compact statement that preserves the comparisons future valid merges require.
+> how should A.P.C. preserve or prove historical causal membership without forcing the hot representation to grow with every lifetime revision?
 
-Candidate directions include deterministic ID-only join/checkpoint witnesses and retained sync generations. Neither is accepted yet.
+The exact-coverage oracle still stores one opaque membership ID per compacted historical revision, so total exact coverage metadata remains linear.
 
 ## 10. Relation to user history
 
-The direct causal DAG is merge metadata, not a user-facing edit log.
+The direct causal DAG and checkpoint coverage are merge metadata, not a user-facing edit log.
 
-It exists only because future merge correctness may require evidence that one revision observed another.
+They exist only because future merge correctness may require evidence that one revision observed another or that an old baseline belonged to an already incorporated history.
 
 A.P.C. still does not require preservation of every intermediate user-visible state, keystroke or GitHub transport commit.
 
-If causal nodes can later be safely summarized without changing any valid merge result, they should be compacted.
+Local crash durability is also distinct from portable causal-revision creation. A future experiment will test whether many durable local edits can safely collapse into one portable causal revision at an observation/publication boundary.
+
+If causal nodes or historical membership can later be safely summarized without changing any valid merge result, they should be compacted.
 
 ## 11. Current decision
 
-The research status after this pass is:
+The research status after the causality and first checkpoint passes is:
 
 1. Full explicit ancestor sets remain the correctness oracle and remain rejected for production storage.
 2. Direct-frontier parent references preserve the tested scalar causal semantics while reducing linear-history reference growth from quadratic to linear.
@@ -216,18 +220,21 @@ The research status after this pass is:
 4. Wide concurrent frontiers remain a cost and are now measurable explicitly.
 5. Baseline-aware incremental sync can send only missing causal nodes rather than the complete register state.
 6. A missing causal baseline must cause buffering/rebootstrap/retrieval, never an inferred ordering decision.
-7. Safe causal-node compaction remains unresolved and is now the primary causality research problem.
+7. Hot causal node bodies can be compacted more aggressively than the first direct-frontier model suggested, but exact arbitrary-old-ID membership still has a retained cost.
+8. Checkpoint identity MUST NOT silently replace logical revision identity.
+9. Safe long-term historical-membership compaction is now the primary causality research problem.
 
 ## 12. Next experiments
 
-The next pass should attack:
+The next pass should compare explicit alternatives for that membership problem rather than invent another generic checkpoint object:
 
-- deterministic ID-only causal join/checkpoint witnesses;
-- safe replacement of old direct-parent subgraphs while one replica remains offline;
-- duplicate and out-of-order compact deltas across several sync generations;
-- concurrent frontier widths in the thousands without quadratic merge implementation artifacts;
-- interaction between compact causality and lifecycle tombstones;
-- whether one causal summary can safely cover several independent merge domains or whether summaries must remain domain-local;
-- capsule size and merge cost before and after compaction.
+- exact historical membership kept in a cold index outside the hot DAG;
+- authenticated set commitments plus membership proofs, without selecting a cryptographic accumulator prematurely;
+- retained transport/causal generations with an explicit stale-baseline horizon and safe rebootstrap path;
+- causal-revision coalescing so frequent local durable edits do not automatically create equal numbers of portable causal nodes;
+- duplicate and out-of-order compact deltas across several generations;
+- interaction between compaction and lifecycle tombstones;
+- whether one causal summary can safely cover several independent merge domains or must remain domain-local;
+- capsule size and merge cost before and after each compaction strategy.
 
 Sequence/moved-anchor research continues independently in parallel.
