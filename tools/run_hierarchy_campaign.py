@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from reference_model.apc_model import ModelError  # noqa: E402
 from reference_model.hierarchy_bounded_lab import (  # noqa: E402
     resolve_with_one_witness_fallback,
     resolve_with_root_fallback,
@@ -122,20 +123,29 @@ def run_seed(
 
     if full_history:
         started = time.perf_counter()
-        full = resolve_acyclic_with_metrics(state)
-        full_seconds = time.perf_counter() - started
-        result["full_history"] = {
-            "seconds": full_seconds,
-            "metrics": full.metrics.__dict__,
-        }
-        result["full_vs_one_parent_difference_count"] = parent_difference_count(
-            full.resolved.active_parents,
-            one.active_parents,
-        )
-        result["full_vs_root_parent_difference_count"] = parent_difference_count(
-            full.resolved.active_parents,
-            root.active_parents,
-        )
+        try:
+            full = resolve_acyclic_with_metrics(state)
+        except ModelError as exc:
+            result["full_history"] = {
+                "status": "model_error",
+                "seconds": time.perf_counter() - started,
+                "error": str(exc),
+            }
+        else:
+            full_seconds = time.perf_counter() - started
+            result["full_history"] = {
+                "status": "ok",
+                "seconds": full_seconds,
+                "metrics": full.metrics.__dict__,
+            }
+            result["full_vs_one_parent_difference_count"] = parent_difference_count(
+                full.resolved.active_parents,
+                one.active_parents,
+            )
+            result["full_vs_root_parent_difference_count"] = parent_difference_count(
+                full.resolved.active_parents,
+                root.active_parents,
+            )
 
     return result
 
@@ -170,15 +180,25 @@ def campaign_summary(runs: list[dict[str, Any]], *, forced_cycles: int) -> dict[
         "forced_cycles_per_run": forced_cycles,
     }
 
-    if runs and "full_history" in runs[0]:
+    full_runs = [run for run in runs if "full_history" in run]
+    if full_runs:
+        successful = [
+            run for run in full_runs if run["full_history"].get("status") == "ok"
+        ]
+        failures = [
+            run for run in full_runs if run["full_history"].get("status") != "ok"
+        ]
+        summary["full_history_run_count"] = len(full_runs)
+        summary["full_history_success_count"] = len(successful)
+        summary["full_history_model_error_count"] = len(failures)
         summary["full_history_seconds"] = summarize_numeric(
-            [float(run["full_history"]["seconds"]) for run in runs]
+            [float(run["full_history"]["seconds"]) for run in full_runs]
         )
         summary["full_vs_one_parent_differences"] = summarize_numeric(
-            [float(run["full_vs_one_parent_difference_count"]) for run in runs]
+            [float(run["full_vs_one_parent_difference_count"]) for run in successful]
         )
         summary["full_vs_root_parent_differences"] = summarize_numeric(
-            [float(run["full_vs_root_parent_difference_count"]) for run in runs]
+            [float(run["full_vs_root_parent_difference_count"]) for run in successful]
         )
 
     return summary
@@ -232,13 +252,17 @@ def main() -> int:
             full_history=full_history,
         )
         runs.append(run)
+        full_status = ""
+        if "full_history" in run:
+            full_status = f" full={run['full_history'].get('status', 'unknown')}"
         print(
             "  cycles={cycles} spontaneous={spontaneous} "
-            "one-vs-root={diff} one-root-fallbacks={root_fallbacks}".format(
+            "one-vs-root={diff} one-root-fallbacks={root_fallbacks}{full_status}".format(
                 cycles=run["initial_cycle_count"],
                 spontaneous=run["spontaneous_cycle_count"],
                 diff=run["one_vs_root_parent_difference_count"],
                 root_fallbacks=run["one_witness"]["metrics"]["root_fallback_count"],
+                full_status=full_status,
             ),
             flush=True,
         )
