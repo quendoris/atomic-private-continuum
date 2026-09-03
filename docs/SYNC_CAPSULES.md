@@ -167,3 +167,29 @@ The exact API is not frozen.
 GitHub-specific rules such as object-size ceilings, branches, commit retries, conditional HTTP requests and repository permissions live outside this interface.
 
 This separation is mandatory: replacing GitHub with LAN or another transport must not require changing the logical merge model.
+
+## 11. Protection boundary
+
+A clear sync projection exists only inside the trusted A.P.C. core/sync layer.
+
+Before a capsule or multipart part is handed to GitHub, LAN, removable-media sync or any other transport, its sensitive state must already be end-to-end protected.
+
+Conceptually:
+
+```text
+dirty merge domains
+      |
+clear sync projection
+      |
+protect/authenticate
+      |
+opaque capsule / part
+      |
+transport adapter
+```
+
+Transport-side partitioning, retry, storage and delivery operate on opaque protected objects. A transport adapter must not need to decrypt them to perform its job.
+
+A multipart publication must cryptographically bind part identity, publication identity and completeness metadata strongly enough that an attacker or broken transport cannot substitute a part from another publication without detection.
+
+The exact authenticated-encryption and key-evolution construction remains open. The executable sync lab uses a deliberately non-cryptographic opaque test double only to test this API boundary.

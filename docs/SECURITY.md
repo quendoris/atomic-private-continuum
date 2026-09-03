@@ -119,3 +119,29 @@ A.P.C. MUST NOT imply recoverability that the cryptographic architecture does no
 If all required keys are lost, protected data may be permanently inaccessible.
 
 There is no mandatory vendor account, e-mail recovery path or hidden master recovery key.
+
+## 10. Synchronization protection invariant
+
+End-to-end protection continues to apply when A.P.C. uses partial sync projections, capsules, attachment chunks or multipart publications instead of a complete native container.
+
+The optimization boundary MUST be:
+
+```text
+clear logical state inside A.P.C. core
+        |
+construct mergeable projection
+        |
+protect projection/chunk
+        |
+transport adapter
+```
+
+A transport adapter MUST NOT require plaintext content or plaintext merge-domain values in order to poll, publish, retry, split, resume or compact transport state.
+
+GitHub filenames, commits, refs and API requests may reveal unavoidable transport metadata such as object count, approximate protected sizes and access timing. They MUST NOT intentionally reveal protected user content or semantic block names.
+
+Splitting one logical publication into several transport files MUST NOT weaken cryptographic binding between the parts and the logical publication. A receiver must authenticate and validate the required parts before exposing the merged state.
+
+Repeated synchronization encryption/decryption is an expected foreground workload. Performance optimization may reduce redundant protection work, but MUST NOT bypass end-to-end protection merely to save CPU, battery or transport bytes.
+
+The concrete authenticated-encryption construction, nonce strategy, key hierarchy and replay/rollback treatment remain open until selected and tested. Reference-model test doubles that model an opaque transport boundary are not cryptographic implementations and MUST NOT be described as providing security.
