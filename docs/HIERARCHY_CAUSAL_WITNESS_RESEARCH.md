@@ -56,7 +56,7 @@ Thus the witness has a stronger semantic interpretation than "the next historica
 
 No wall clock, branch order or transport order is involved.
 
-## 3. Executable counterexample
+## 3. Executable concurrent-alternative counterexample
 
 The test constructs:
 
@@ -87,12 +87,51 @@ because P is the parent recorded in X's causal context.
 
 The test explicitly verifies that revision X does not contain revision Y in its causal context.
 
-## 4. Consequence for the candidate hierarchy semantics
+## 4. Full-history fallback is not a total resolver
 
-This finding makes one-witness fallback more attractive for two independent reasons:
+A second counterexample removes an even stronger assumption.
+
+Start with:
+
+```text
+B under P
+B -> Q
+```
+
+and merge concurrent back-edges:
+
+```text
+Q -> B
+P -> B
+```
+
+The current `B -> Q` placement is invalid, so full-history rejects it and falls back to the foundational `B -> P` placement. That placement is also invalid. Rejecting it exhausts every retained placement revision for B.
+
+The full-history research resolver therefore has no defined valid result and raises `ModelError`.
+
+The bounded one-witness policy is total for this tested shape:
+
+```text
+B -> Q
+  invalid
+    -> witness P
+       invalid
+         -> root
+```
+
+Direct-root fallback is also total.
+
+This means full-history is not merely expensive. Its literal historical-reactivation semantics can fail to produce any placement unless an additional safe fallback is defined.
+
+The multi-seed campaign runner now records such oracle failures as data instead of aborting the campaign.
+
+## 5. Consequence for the candidate hierarchy semantics
+
+These findings make one-witness fallback more attractive for three independent reasons:
 
 1. bounded work and bounded hierarchy-validity metadata;
-2. fallback is tied to the causal predecessor observed by the rejected move instead of to an arbitrary surviving concurrent alternative.
+2. fallback is tied to the causal predecessor observed by the rejected move instead of to an arbitrary surviving concurrent alternative;
+3. an explicit root fallback makes the tested resolver total when both current and witness placements are invalid.
 
 The full-history resolver remains valuable as an adversarial oracle and as a model of maximum historical reactivation, but it should no longer be treated as an unquestioned semantic ideal.
 
@@ -110,7 +149,7 @@ versus:
 unbounded historical reactivation
 ```
 
-## 5. Benchmark evidence motivating the next pass
+## 6. Benchmark evidence motivating the next pass
 
 The first workstation results strengthen the need for statistical comparison.
 
@@ -120,15 +159,16 @@ A smaller oracle run with 5,000 atoms and 50,000 independent branch revisions pr
 
 This is expected under the concurrent-alternative counterexample: full-history may reactivate another concurrent placement while one-witness returns to the causal predecessor.
 
-The next campaign should therefore measure per-atom disagreement counts, not only whole-graph digest equality.
+The next campaign should therefore measure per-atom disagreement counts, not only whole-graph digest equality, and should count seeds where full-history exhausts all placements.
 
-## 6. Next experiments
+## 7. Next experiments
 
 The next statistical pass should measure across many deterministic seeds and move densities:
 
 - spontaneous cycle count beyond intentionally forced cycles;
 - atoms where one-witness differs from direct root;
 - atoms where one-witness differs from full-history;
+- full-history placement-exhaustion frequency;
 - atoms where full-history fallback selected a placement not observed by the rejected current move;
 - witness-to-root fallback frequency;
 - resolution iterations and runtime;
