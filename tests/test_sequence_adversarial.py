@@ -4,11 +4,11 @@ import random
 import unittest
 
 from reference_model.apc_model import ModelError
-from reference_model.sequence_lab import (
+from reference_model.sequence_adversarial import (
     DeleteWinsSequenceLab,
-    FuguePositionTree,
-    MovableSequenceLab,
+    sequence_metrics,
 )
+from reference_model.sequence_lab import FuguePositionTree, MovableSequenceLab
 
 
 def hid(value: int) -> str:
@@ -251,7 +251,7 @@ class MetadataGrowthResearch(unittest.TestCase):
                 revision_id=hid(4_000_000 + index),
             )
 
-        metrics = seq.metrics()
+        metrics = sequence_metrics(seq)
         self.assertEqual(metrics.position_count, 3 + moves)
         self.assertEqual(metrics.visible_atom_count, 3)
         self.assertEqual(metrics.location_revision_count, 3 + moves)
