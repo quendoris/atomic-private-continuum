@@ -43,6 +43,12 @@ opaque_id!(AtomId);
 opaque_id!(ReplicaId);
 opaque_id!(RevisionId);
 
+/// Device-local crash-recovery identity for one pending working epoch.
+///
+/// This identity is deliberately distinct from `RevisionId`. It is not portable
+/// causal identity and must never participate in merge ordering.
+opaque_id!(WorkingEpochId);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,7 +68,9 @@ mod tests {
         let bytes = [7_u8; LOGICAL_ID_BYTES];
         let atom = AtomId::from_bytes(bytes);
         let revision = RevisionId::from_bytes(bytes);
+        let working_epoch = WorkingEpochId::from_bytes(bytes);
 
         assert_eq!(atom.into_bytes(), revision.into_bytes());
+        assert_eq!(working_epoch.into_bytes(), revision.into_bytes());
     }
 }
