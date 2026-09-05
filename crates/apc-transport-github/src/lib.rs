@@ -82,8 +82,12 @@ pub struct GitHubCommitInfo {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GitHubCreateCommitResult {
-    Created { head: GitHubCommitOid },
-    HeadChanged { current_head: Option<GitHubCommitOid> },
+    Created {
+        head: GitHubCommitOid,
+    },
+    HeadChanged {
+        current_head: Option<GitHubCommitOid>,
+    },
 }
 
 /// Narrow GitHub API surface required by the transport algorithm.
@@ -105,11 +109,7 @@ pub trait GitHubApi {
 
     fn commit_info(&mut self, oid: &GitHubCommitOid) -> Result<GitHubCommitInfo, Self::Error>;
 
-    fn read_file_at(
-        &mut self,
-        oid: &GitHubCommitOid,
-        path: &str,
-    ) -> Result<Vec<u8>, Self::Error>;
+    fn read_file_at(&mut self, oid: &GitHubCommitOid, path: &str) -> Result<Vec<u8>, Self::Error>;
 }
 
 #[derive(Debug)]
@@ -132,7 +132,10 @@ impl<E: core::fmt::Display> core::fmt::Display for GitHubTransportError<E> {
                 write!(f, "GitHub transport branch has no initial commit")
             }
             Self::InvalidCommitIdentity => {
-                write!(f, "GitHub API returned commit metadata for a different object ID")
+                write!(
+                    f,
+                    "GitHub API returned commit metadata for a different object ID"
+                )
             }
             Self::InvalidCreatedHead => {
                 write!(f, "GitHub publication did not advance the transport head")
@@ -141,15 +144,12 @@ impl<E: core::fmt::Display> core::fmt::Display for GitHubTransportError<E> {
                 write!(f, "protected transport object path was mutated: {path}")
             }
             Self::ObjectPathMismatch { path } => {
-                write!(f, "protected transport object bytes do not match path: {path}")
+                write!(
+                    f,
+                    "protected transport object bytes do not match path: {path}"
+                )
             }
         }
-    }
-}
-
-impl<E> From<E> for GitHubTransportError<E> {
-    fn from(value: E) -> Self {
-        Self::Api(value)
     }
 }
 
@@ -195,10 +195,7 @@ impl<A: GitHubApi> OpaqueTransport for GitHubTransport<A> {
         &mut self,
         known_head: Option<&Self::Revision>,
     ) -> Result<FetchOutcome<Self::Revision>, Self::Error> {
-        let current_head = self
-            .api
-            .branch_head()
-            .map_err(GitHubTransportError::Api)?;
+        let current_head = self.api.branch_head().map_err(GitHubTransportError::Api)?;
 
         if current_head.as_ref() == known_head {
             return Ok(FetchOutcome::UpToDate { head: current_head });
@@ -216,9 +213,7 @@ impl<A: GitHubApi> OpaqueTransport for GitHubTransport<A> {
 
         while &cursor != known_head {
             if commits.len() >= self.max_incremental_commits {
-                return Ok(FetchOutcome::BaselineUnavailable {
-                    head: current_head,
-                });
+                return Ok(FetchOutcome::BaselineUnavailable { head: current_head });
             }
 
             let info = self
@@ -229,9 +224,7 @@ impl<A: GitHubApi> OpaqueTransport for GitHubTransport<A> {
                 return Err(GitHubTransportError::InvalidCommitIdentity);
             }
             if info.parents.len() != 1 {
-                return Ok(FetchOutcome::BaselineUnavailable {
-                    head: current_head,
-                });
+                return Ok(FetchOutcome::BaselineUnavailable { head: current_head });
             }
 
             cursor = info.parents[0].clone();
@@ -265,9 +258,7 @@ impl<A: GitHubApi> OpaqueTransport for GitHubTransport<A> {
                     .read_file_at(&commit.oid, &change.path)
                     .map_err(GitHubTransportError::Api)?;
                 if object_path(&bytes) != change.path {
-                    return Err(GitHubTransportError::ObjectPathMismatch {
-                        path: change.path,
-                    });
+                    return Err(GitHubTransportError::ObjectPathMismatch { path: change.path });
                 }
                 objects.push(bytes);
             }
@@ -286,10 +277,7 @@ impl<A: GitHubApi> OpaqueTransport for GitHubTransport<A> {
         }
 
         let Some(expected_head) = expected_head else {
-            let current = self
-                .api
-                .branch_head()
-                .map_err(GitHubTransportError::Api)?;
+            let current = self.api.branch_head().map_err(GitHubTransportError::Api)?;
             return match current {
                 Some(current_head) => Ok(PublishOutcome::Conflict {
                     current_head: Some(current_head),
@@ -464,11 +452,7 @@ mod tests {
                 .ok_or(FakeApiError("unknown commit"))
         }
 
-        fn read_file_at(
-            &mut self,
-            oid: &GitHubCommitOid,
-            path: &str,
-        ) -> Result<Vec<u8>, Self::Error> {
+        fn read_file_at(&mut self, oid: &GitHubCommitOid, path: &str) -> Result<Vec<u8>, Self::Error> {
             self.commits
                 .get(oid)
                 .and_then(|commit| commit.files.get(path))
@@ -551,22 +535,17 @@ mod tests {
         let api = FakeGitHubApi::seeded();
         let mut transport = GitHubTransport::with_max_incremental_commits(api, 2);
         let seed = transport.head().unwrap().unwrap();
-        let head_a = match transport
-            .publish(Some(&seed), &[b"a".to_vec()])
-            .unwrap()
-        {
+        let head_a = match transport.publish(Some(&seed), &[b"a".to_vec()]).unwrap() {
             PublishOutcome::Published { head } => head,
             other => panic!("unexpected result: {other:?}"),
         };
-        let _head_b = match transport
-            .publish(Some(&head_a), &[b"b".to_vec()])
-            .unwrap()
-        {
+        let _head_b = match transport.publish(Some(&head_a), &[b"b".to_vec()]).unwrap() {
             PublishOutcome::Published { head } => head,
             other => panic!("unexpected result: {other:?}"),
         };
+        let before_c = transport.head().unwrap().unwrap();
         let current = match transport
-            .publish(transport.head().unwrap().as_ref(), &[b"c".to_vec()])
+            .publish(Some(&before_c), &[b"c".to_vec()])
             .unwrap()
         {
             PublishOutcome::Published { head } => head,
