@@ -131,11 +131,7 @@ impl DurableSyncRecord {
     /// Pending outbound publications are intentionally preserved. A crash before
     /// this updated record becomes durable therefore restores both the old state
     /// and the old cursor; a crash after durability restores both new values.
-    pub fn apply_received(
-        &mut self,
-        merged_trusted_state: Vec<u8>,
-        new_cursor: TransportCursor,
-    ) {
+    pub fn apply_received(&mut self, merged_trusted_state: Vec<u8>, new_cursor: TransportCursor) {
         self.trusted_state = merged_trusted_state;
         self.applied_cursor = Some(new_cursor);
     }
@@ -189,10 +185,16 @@ impl core::fmt::Display for SyncRecoveryError {
             Self::EmptyOutbox => write!(f, "outbound publication must contain protected objects"),
             Self::EmptyOutboxObject => write!(f, "outbound protected object must not be empty"),
             Self::DuplicatePublication => {
-                write!(f, "durable sync recovery contains duplicate publication IDs")
+                write!(
+                    f,
+                    "durable sync recovery contains duplicate publication IDs"
+                )
             }
             Self::PublicationIdentityCollision => {
-                write!(f, "publication ID reused for different durable outbox bytes")
+                write!(
+                    f,
+                    "publication ID reused for different durable outbox bytes"
+                )
             }
             Self::UnknownOutboxPublication => {
                 write!(f, "cannot retire an unknown durable outbox publication")
@@ -400,7 +402,8 @@ mod tests {
 
     #[test]
     fn outbox_is_prepared_with_exact_wire_bytes_before_network_io() {
-        let mut record = DurableSyncRecord::new(b"state-before-exposure".to_vec(), Some(cursor("R0")));
+        let mut record =
+            DurableSyncRecord::new(b"state-before-exposure".to_vec(), Some(cursor("R0")));
         let objects = vec![b"protected-wire-A".to_vec(), b"protected-wire-B".to_vec()];
 
         record
