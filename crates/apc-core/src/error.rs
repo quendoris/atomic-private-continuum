@@ -10,6 +10,9 @@ pub enum CoreError {
     RevisionAlreadyKnown {
         revision_id: RevisionId,
     },
+    UnknownRevision {
+        revision_id: RevisionId,
+    },
     MissingParent {
         revision_id: RevisionId,
         parent_id: RevisionId,
@@ -51,6 +54,9 @@ impl fmt::Display for CoreError {
             }
             Self::RevisionAlreadyKnown { revision_id } => {
                 write!(f, "revision identity {revision_id:?} is already known")
+            }
+            Self::UnknownRevision { revision_id } => {
+                write!(f, "revision {revision_id:?} is not present in causal state")
             }
             Self::MissingParent {
                 revision_id,
