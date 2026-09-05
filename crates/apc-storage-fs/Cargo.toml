@@ -12,3 +12,4 @@ apc-core = { path = "../apc-core" }
 [dev-dependencies]
 apc-crypto = { path = "../apc-crypto" }
 apc-sync = { path = "../apc-sync" }
+apc-transport-github = { path = "../apc-transport-github" }
