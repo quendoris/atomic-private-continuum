@@ -10,6 +10,8 @@
 #[cfg(not(unix))]
 compile_error!("apc-storage-fs currently implements the development Unix backend only");
 
+mod recovery;
+
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -27,6 +29,7 @@ const CANDIDATE_SUFFIX: &str = ".bin";
 pub enum FsStorageError {
     Io(std::io::Error),
     InvalidRootManifest,
+    InvalidRecoveryRecord,
     CandidateIdExhausted,
 }
 
@@ -35,6 +38,7 @@ impl fmt::Display for FsStorageError {
         match self {
             Self::Io(error) => write!(f, "filesystem storage error: {error}"),
             Self::InvalidRootManifest => write!(f, "invalid committed-root manifest"),
+            Self::InvalidRecoveryRecord => write!(f, "invalid development recovery record"),
             Self::CandidateIdExhausted => write!(f, "candidate identifier space exhausted"),
         }
     }
@@ -44,7 +48,9 @@ impl std::error::Error for FsStorageError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
-            Self::InvalidRootManifest | Self::CandidateIdExhausted => None,
+            Self::InvalidRootManifest
+            | Self::InvalidRecoveryRecord
+            | Self::CandidateIdExhausted => None,
         }
     }
 }
@@ -146,16 +152,18 @@ impl DurabilityBackend<Vec<u8>> for UnixFsDurabilityBackend {
             return Err(FsStorageError::InvalidRootManifest);
         }
 
-        let mut bytes = Vec::new();
-        File::open(self.objects_dir().join(file_name))?.read_to_end(&mut bytes)?;
-        Ok(Some(bytes))
+        let mut encoded = Vec::new();
+        File::open(self.objects_dir().join(file_name))?.read_to_end(&mut encoded)?;
+        let state = recovery::decode(&encoded).map_err(|_| FsStorageError::InvalidRecoveryRecord)?;
+        Ok(Some(state))
     }
 
     fn write_candidate(&mut self, state: &Vec<u8>) -> Result<Self::Candidate, Self::Error> {
         let candidate = self.allocate_candidate()?;
         let path = self.candidate_path(&candidate);
+        let encoded = recovery::encode(state);
         let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
-        file.write_all(state)?;
+        file.write_all(&encoded)?;
         file.flush()?;
         Ok(candidate)
     }
@@ -323,6 +331,25 @@ mod tests {
         assert!(matches!(
             backend.load_committed(),
             Err(FsStorageError::InvalidRootManifest)
+        ));
+    }
+
+    #[test]
+    fn corrupt_committed_candidate_fails_closed() {
+        let directory = TestDir::new();
+        let mut backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+        commit_durable(&mut backend, &b"protected-by-framing".to_vec()).unwrap();
+
+        let manifest = fs::read_to_string(backend.root_manifest()).unwrap();
+        let candidate_path = backend.objects_dir().join(manifest.trim_end());
+        let mut bytes = fs::read(&candidate_path).unwrap();
+        let index = bytes.len() / 2;
+        bytes[index] ^= 0x80;
+        fs::write(candidate_path, bytes).unwrap();
+
+        assert!(matches!(
+            backend.load_committed(),
+            Err(FsStorageError::InvalidRecoveryRecord)
         ));
     }
 
