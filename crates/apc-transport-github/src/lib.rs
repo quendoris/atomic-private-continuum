@@ -452,7 +452,11 @@ mod tests {
                 .ok_or(FakeApiError("unknown commit"))
         }
 
-        fn read_file_at(&mut self, oid: &GitHubCommitOid, path: &str) -> Result<Vec<u8>, Self::Error> {
+        fn read_file_at(
+            &mut self,
+            oid: &GitHubCommitOid,
+            path: &str,
+        ) -> Result<Vec<u8>, Self::Error> {
             self.commits
                 .get(oid)
                 .and_then(|commit| commit.files.get(path))
