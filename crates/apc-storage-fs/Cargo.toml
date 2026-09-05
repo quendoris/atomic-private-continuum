@@ -8,3 +8,6 @@ publish = false
 
 [dependencies]
 apc-core = { path = "../apc-core" }
+
+[dev-dependencies]
+apc-crypto = { path = "../apc-crypto" }
