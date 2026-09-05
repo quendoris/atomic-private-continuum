@@ -29,8 +29,8 @@ pub use recovery::{
 };
 pub use session::{
     commit_received, commit_reconciled_outbox, fetch_from_durable_cursor, publish_staged,
-    stage_outbound, PersistTransitionError, SessionCommitError, SessionIoError, SyncRecordStore,
-    TransportCursorCodec,
+    stage_outbound, PersistTransitionError, SessionCommitError, SessionIoError, SessionIoResult,
+    SyncRecordStore, TransportCursorCodec,
 };
 pub use transport::{FetchOutcome, OpaqueTransport, PublishOutcome};
 pub use wire::{decode_protected_sync_part, encode_protected_sync_part, ProtectedPartCodecError};
