@@ -1,6 +1,6 @@
 # A.P.C. durable synchronization recovery
 
-Status: **transport-independent crash-recovery record implemented; Android power-loss behavior and the final portable/local encoding are not frozen**.
+Status: **transport-independent crash-recovery record, protected durable record store and first foreground session coordinator implemented; Android power-loss behavior and the final portable/local encoding are not frozen**.
 
 This document records the local durability rules that sit between semantic merge state and an opaque transport such as GitHub. It supplements `SYNC.md`, `SYNC_CAPSULES.md`, `DURABILITY.md`, `CORE_IMPLEMENTATION.md` and `SYNC_IMPLEMENTATION.md`.
 
@@ -99,7 +99,9 @@ network I/O may begin
 
 The important boundary is that exposure and the retry material become durable **before** the first network handoff that might succeed externally.
 
-`DurableSyncRecord::prepare_outbox()` models this transition. The type cannot independently prove that `trusted_state` contains the required semantic exposure bookkeeping; that proof remains the responsibility of the higher finalization-to-sync bridge.
+`DurableSyncRecord::prepare_outbox()` models the recovery-state transition. The higher-level `stage_outbound()` coordinator clones the current record, prepares the outbox against the currently durable applied cursor, persists the complete next recovery unit through `SyncRecordStore`, and only then updates the caller's in-memory state. If persistence fails, no network-eligible state transition is exposed to the caller.
+
+The sync layer still cannot independently prove that `trusted_state` contains the required semantic exposure bookkeeping; that proof remains the responsibility of the finalization-to-sync bridge.
 
 ## 5. Exact-byte retry
 
@@ -127,6 +129,8 @@ Repeated transport attempts therefore do not require reconstructing an allegedly
 
 Reusing one `PublicationId` with different durable outbox bytes is rejected. Re-preparing the exact same publication is idempotent.
 
+`publish_staged()` reads only the already-durable outbox entry and never removes it merely because `OpaqueTransport::publish()` returned success. Publication success and durable outbox retirement are deliberately separate transitions.
+
 ## 6. Unknown acknowledgement
 
 A network acknowledgement is not the exposure boundary and is not assumed to survive process death.
@@ -145,9 +149,14 @@ After restart the durable outbox still exists and the local applied cursor may s
 
 The client must not silently discard the outbox and must not assume the first request failed. It may retry the exact protected bytes; if the expected head is now stale, the conflict becomes a reconciliation signal. The client then fetches from its durable cursor, authenticates and merges the returned protected state, and determines the publication outcome from observable transport state rather than from a lost ACK.
 
-Only reconciliation may retire the corresponding outbox entry.
+The first executable session coordinator now implements this separation:
 
-`retire_outbox(publication_id, trusted_state, cursor)` removes exactly the named publication while updating the trusted state and applied cursor in the same recovery record. Other pending publications survive.
+- `publish_staged()` retries the exact durable bytes against the exact staged expected cursor;
+- `fetch_from_durable_cursor()` fetches only from the cursor paired with the current durable local record;
+- `commit_reconciled_outbox()` retires exactly one named publication only while durably committing the reconciled trusted state and observed transport head together;
+- other staged/in-flight publications survive reconciliation of one entry.
+
+An integration test exercises the lost-ACK sequence through the real development filesystem durability backend: remote acceptance occurs, the local store is closed before ACK handling, recovery reloads the old applied cursor plus the still-present exact outbox bytes, retry yields a stale-head conflict, fetch from the durable cursor rediscovers the accepted object, and only the final durable reconciliation removes the outbox.
 
 ## 7. Incoming ordering
 
@@ -179,11 +188,35 @@ Incomplete multipart state may be retained as a traffic optimization, but correc
 
 `DurableSyncRecord::apply_received()` intentionally preserves all pending outbound publications while advancing `trusted_state` and `applied_cursor` together.
 
-## 8. Implemented crash/restart tests
+`commit_received()` now wraps that transition in the same clone-persist-swap rule as outbound staging: cursor encoding and durable persistence must both succeed before the caller's in-memory record advances. A failed durable commit therefore cannot leave the running process with a cursor newer than the recoverable state.
 
-The current Rust suite now tests the durable recovery boundary against the real development Unix filesystem backend.
+## 8. Protected durable record store
 
-One test commits `{old state, R0}`, constructs `{merged state, R1}`, writes and synchronizes the new candidate object, but deliberately does not publish it as the committed root. After closing and reopening the backend, recovery still returns `{old state, R0}`. After a complete durable commit, recovery returns `{merged state, R1}`.
+`ProtectedSyncRecordStore<B>` now bridges the transport-independent recovery record to any `DurabilityBackend<Vec<u8>>`.
+
+Its path is:
+
+```text
+DurableSyncRecord
+        |
+APCSREC1 deterministic recovery encoding
+        |
+XChaCha20-Poly1305 protection
+        |
+DurabilityBackend<Vec<u8>>
+        |
+commit_durable()
+```
+
+The caller supplies a non-empty local context that is combined with an internal durable-sync domain separator before AEAD protection. A different key or context cannot open the committed record. The backend therefore never receives clear `trusted_state`, cursor or outbox framing from this adapter.
+
+This remains development recovery machinery rather than the native `.apc` format. The purpose is to establish the failure boundary before freezing a portable/local storage encoding.
+
+## 9. Implemented crash/restart tests
+
+The Rust suite tests the durable recovery boundary at several levels.
+
+One filesystem test commits `{old state, R0}`, constructs `{merged state, R1}`, writes and synchronizes the new candidate object, but deliberately does not publish it as the committed root. After closing and reopening the backend, recovery still returns `{old state, R0}`. After a complete durable commit, recovery returns `{merged state, R1}`.
 
 This demonstrates the required pairing at the current filesystem abstraction:
 
@@ -195,9 +228,13 @@ after complete durable commit:
     new state + new cursor
 ```
 
-A second test durably stores an outbox, closes/reopens the backend, verifies the exact protected wire bytes survive, applies an incoming cursor while retaining that outbox, closes/reopens again, then reconciles and retires only the named publication. The complete recovery record is additionally protected with the real authenticated-encryption layer before filesystem persistence.
+A second test durably stores an outbox, closes/reopens the backend, verifies the exact protected wire bytes survive, applies an incoming cursor while retaining that outbox, closes/reopens again, then reconciles and retires only the named publication. The complete recovery record is protected with the real authenticated-encryption layer before filesystem persistence.
 
-## 9. What this does not yet prove
+The session-level tests additionally inject persistence failure before outbound staging and before incoming cursor advancement. In both cases the caller's in-memory record remains unchanged.
+
+The lost-ACK filesystem integration test combines the protected record store, session coordinator and an opaque CAS-like transport model and verifies restart/retry/reconciliation without guessing transport outcome.
+
+## 10. What this does not yet prove
 
 The current tests establish crash-consistent behavior at the Rust durability contract and Unix development backend. They do **not** yet prove actual handset power-loss behavior.
 
@@ -214,7 +251,7 @@ In particular:
 
 The implementation must preserve these seams rather than treating the development recovery record as the native `.apc` format.
 
-## 10. Android validation path
+## 11. Android validation path
 
 Once the first Android binding exists, the same state machine should be exercised through ADB rather than by manual UI testing.
 
@@ -242,16 +279,15 @@ eventual controlled device power-cycle tests
 
 The test oracle should inspect durable state, cursor and outbox rather than merely checking that the application opens.
 
-## 11. Immediate next implementation work
+## 12. Immediate next implementation work
 
 The next slice should:
 
 1. give the GitHub adapter an explicit reversible conversion between `GitHubCommitOid` and local opaque `TransportCursor` bytes without introducing ordering semantics;
-2. implement a foreground sync-session coordinator that persists an outbox before calling `OpaqueTransport::publish()`;
-3. reconcile lost-ACK conflicts by fetching from the durable applied cursor instead of guessing publication outcome;
-4. durably pair inbound merged state with the fetched transport cursor before exposing that cursor to the next session;
-5. keep network cancellation on application background independent from correctness;
-6. add deterministic failure injection around every persistence/network boundary;
-7. later reproduce the same matrix on Android through ADB.
+2. connect the already-implemented session coordinator to the GitHub adapter in an adapter-level lost-ACK/retry test;
+3. add deterministic failure injection around transport acceptance, fetch, merge persistence and outbox retirement, including overlapping in-flight publications;
+4. keep network cancellation on application background independent from correctness and perform immediate catch-up/reconciliation on resume;
+5. define the narrow finalization-to-sync preparation seam without freezing the unresolved private-squashing policy;
+6. later reproduce the same matrix on Android through ADB.
 
 The intended architecture remains simple: semantic state decides meaning, crypto decides authenticity/confidentiality, durability decides what survives restart, and transport only moves opaque authenticated objects.
