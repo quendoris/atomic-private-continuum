@@ -29,7 +29,9 @@ impl core::fmt::Display for ProtectedPartCodecError {
             }
             Self::UnexpectedEof => write!(f, "truncated protected sync part"),
             Self::LengthOverflow => write!(f, "protected sync part length overflows host limits"),
-            Self::InvalidMultipartMetadata => write!(f, "invalid protected sync multipart metadata"),
+            Self::InvalidMultipartMetadata => {
+                write!(f, "invalid protected sync multipart metadata")
+            }
             Self::LengthMismatch => write!(f, "protected sync part length does not match payload"),
         }
     }
@@ -81,8 +83,8 @@ pub fn decode_protected_sync_part(
     let total_parts = reader.read_u32()?;
     validate_metadata(part_index, total_parts)?;
 
-    let payload_len = usize::try_from(reader.read_u64()?)
-        .map_err(|_| ProtectedPartCodecError::LengthOverflow)?;
+    let payload_len =
+        usize::try_from(reader.read_u64()?).map_err(|_| ProtectedPartCodecError::LengthOverflow)?;
     if reader.remaining() != payload_len {
         return Err(ProtectedPartCodecError::LengthMismatch);
     }
