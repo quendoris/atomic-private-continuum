@@ -154,7 +154,8 @@ impl DurabilityBackend<Vec<u8>> for UnixFsDurabilityBackend {
 
         let mut encoded = Vec::new();
         File::open(self.objects_dir().join(file_name))?.read_to_end(&mut encoded)?;
-        let state = recovery::decode(&encoded).map_err(|_| FsStorageError::InvalidRecoveryRecord)?;
+        let state =
+            recovery::decode(&encoded).map_err(|_| FsStorageError::InvalidRecoveryRecord)?;
         Ok(Some(state))
     }
 
