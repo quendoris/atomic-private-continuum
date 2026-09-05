@@ -66,7 +66,10 @@ impl core::fmt::Display for SyncPartError {
             Self::InvalidMultipartMetadata => write!(f, "invalid sync multipart metadata"),
             Self::MultipartTotalMismatch => write!(f, "sync multipart total changed in flight"),
             Self::MultipartPartCollision => {
-                write!(f, "sync multipart index contains conflicting authenticated state")
+                write!(
+                    f,
+                    "sync multipart index contains conflicting authenticated state"
+                )
             }
             Self::EmptyProjection => write!(f, "cannot protect an empty sync projection part"),
             Self::Codec(error) => write!(f, "sync projection codec error: {error}"),
@@ -162,9 +165,8 @@ fn part_context(
     part_index: u32,
     total_parts: u32,
 ) -> Vec<u8> {
-    let mut context = Vec::with_capacity(
-        SYNC_PART_CONTEXT_DOMAIN.len() + 32 + PUBLICATION_ID_BYTES + 4 + 4,
-    );
+    let mut context =
+        Vec::with_capacity(SYNC_PART_CONTEXT_DOMAIN.len() + 32 + PUBLICATION_ID_BYTES + 4 + 4);
     context.extend_from_slice(SYNC_PART_CONTEXT_DOMAIN);
     context.extend_from_slice(continuum_id.as_bytes());
     context.extend_from_slice(publication_id.as_bytes());
@@ -285,53 +287,64 @@ mod tests {
     #[test]
     fn clear_multipart_metadata_is_authenticated_as_context() {
         let key = ContentKey::from_bytes([0x41; 32]);
-        let part = protect_scalar_part(&key, cid(1), pid(5), 0, 2, &projection(1, 10, "secret"))
-            .unwrap();
+        let part =
+            protect_scalar_part(&key, cid(1), pid(5), 0, 2, &projection(1, 10, "secret")).unwrap();
 
         let mut changed_index = part.clone();
         changed_index.part_index = 1;
         assert!(matches!(
             unprotect_scalar_part(&key, cid(1), &changed_index),
-            Err(SyncPartError::Protection(ProtectionError::AuthenticationFailed))
+            Err(SyncPartError::Protection(
+                ProtectionError::AuthenticationFailed
+            ))
         ));
 
         let mut changed_total = part.clone();
         changed_total.total_parts = 3;
         assert!(matches!(
             unprotect_scalar_part(&key, cid(1), &changed_total),
-            Err(SyncPartError::Protection(ProtectionError::AuthenticationFailed))
+            Err(SyncPartError::Protection(
+                ProtectionError::AuthenticationFailed
+            ))
         ));
 
         let mut changed_publication = part;
         changed_publication.publication_id = pid(6);
         assert!(matches!(
             unprotect_scalar_part(&key, cid(1), &changed_publication),
-            Err(SyncPartError::Protection(ProtectionError::AuthenticationFailed))
+            Err(SyncPartError::Protection(
+                ProtectionError::AuthenticationFailed
+            ))
         ));
     }
 
     #[test]
     fn continuum_binding_prevents_cross_continuum_reuse() {
         let key = ContentKey::from_bytes([0x42; 32]);
-        let part = protect_scalar_part(&key, cid(1), pid(5), 0, 1, &projection(1, 10, "secret"))
-            .unwrap();
+        let part =
+            protect_scalar_part(&key, cid(1), pid(5), 0, 1, &projection(1, 10, "secret")).unwrap();
 
         assert!(matches!(
             unprotect_scalar_part(&key, cid(2), &part),
-            Err(SyncPartError::Protection(ProtectionError::AuthenticationFailed))
+            Err(SyncPartError::Protection(
+                ProtectionError::AuthenticationFailed
+            ))
         ));
     }
 
     #[test]
     fn multipart_inbox_is_invisible_until_complete_and_accepts_duplicates() {
         let key = ContentKey::from_bytes([0x43; 32]);
-        let first = protect_scalar_part(&key, cid(1), pid(7), 0, 2, &projection(1, 10, "one"))
-            .unwrap();
-        let second = protect_scalar_part(&key, cid(1), pid(7), 1, 2, &projection(2, 20, "two"))
-            .unwrap();
+        let first =
+            protect_scalar_part(&key, cid(1), pid(7), 0, 2, &projection(1, 10, "one")).unwrap();
+        let second =
+            protect_scalar_part(&key, cid(1), pid(7), 1, 2, &projection(2, 20, "two")).unwrap();
 
         let mut inbox = MultipartInbox::new();
-        assert!(inbox.ingest(&key, cid(1), second.clone()).unwrap().is_none());
+        assert!(inbox
+            .ingest(&key, cid(1), second.clone())
+            .unwrap()
+            .is_none());
         assert!(inbox.ingest(&key, cid(1), second).unwrap().is_none());
 
         let complete = inbox.ingest(&key, cid(1), first).unwrap().unwrap();
