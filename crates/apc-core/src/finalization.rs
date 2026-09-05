@@ -223,7 +223,9 @@ impl<T: Clone + Eq> FinalizationLedger<T> {
             handed_off_local_ids: snapshot.handed_off_local_ids,
         };
 
-        if !ledger.exposed_local_ids.is_subset(&ledger.local_revision_ids)
+        if !ledger
+            .exposed_local_ids
+            .is_subset(&ledger.local_revision_ids)
             || !ledger
                 .handed_off_local_ids
                 .is_subset(&ledger.exposed_local_ids)
