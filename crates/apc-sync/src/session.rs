@@ -70,7 +70,9 @@ pub fn stage_outbound<S: SyncRecordStore>(
     )
     .map_err(PersistTransitionError::Recovery)?;
 
-    store.persist(&next).map_err(PersistTransitionError::Store)?;
+    store
+        .persist(&next)
+        .map_err(PersistTransitionError::Store)?;
     *record = next;
     Ok(())
 }
