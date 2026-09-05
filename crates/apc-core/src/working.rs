@@ -185,19 +185,23 @@ mod tests {
         working.begin_epoch(wid(1), "edit-0".to_owned()).unwrap();
 
         for index in 1..10_000 {
-            working
-                .update_pending(format!("edit-{index}"))
-                .unwrap();
+            working.update_pending(format!("edit-{index}")).unwrap();
         }
 
         assert_eq!(working.causal().len(), 1);
-        assert_eq!(working.pending().unwrap().observed_frontier, BTreeSet::from([rid(100)]));
+        assert_eq!(
+            working.pending().unwrap().observed_frontier,
+            BTreeSet::from([rid(100)])
+        );
 
         let revision = working.seal(rid(50)).unwrap();
         assert_eq!(revision.parents, BTreeSet::from([rid(100)]));
         assert_eq!(revision.value, "edit-9999");
         assert_eq!(working.causal().len(), 2);
-        assert_eq!(working.working_value().map(String::as_str), Some("edit-9999"));
+        assert_eq!(
+            working.working_value().map(String::as_str),
+            Some("edit-9999")
+        );
     }
 
     #[test]
@@ -218,7 +222,9 @@ mod tests {
     #[test]
     fn remote_observation_preserves_true_concurrency() {
         let mut working = WorkingScalar::from_causal(base()).unwrap();
-        working.begin_epoch(wid(1), "local-before-remote".to_owned()).unwrap();
+        working
+            .begin_epoch(wid(1), "local-before-remote".to_owned())
+            .unwrap();
 
         let mut remote = base();
         remote.assign(rid(900), "remote".to_owned()).unwrap();
@@ -229,15 +235,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(sealed.parents, BTreeSet::from([rid(100)]));
-        assert_eq!(working.causal().frontier_ids(), BTreeSet::from([rid(50), rid(900)]));
+        assert_eq!(
+            working.causal().frontier_ids(),
+            BTreeSet::from([rid(50), rid(900)])
+        );
         assert!(!working.causal().is_ancestor(rid(900), rid(50)));
         assert!(!working.causal().is_ancestor(rid(50), rid(900)));
         assert_eq!(working.working_value().map(String::as_str), Some("remote"));
 
-        working.begin_epoch(wid(2), "local-after-remote".to_owned()).unwrap();
+        working
+            .begin_epoch(wid(2), "local-after-remote".to_owned())
+            .unwrap();
         let joined = working.seal(rid(10)).unwrap();
         assert_eq!(joined.parents, BTreeSet::from([rid(50), rid(900)]));
-        assert_eq!(working.working_value().map(String::as_str), Some("local-after-remote"));
+        assert_eq!(
+            working.working_value().map(String::as_str),
+            Some("local-after-remote")
+        );
     }
 
     #[test]
@@ -250,8 +264,14 @@ mod tests {
         let mut restored = WorkingScalar::restore(snapshot).unwrap();
 
         assert_eq!(restored.pending().unwrap().id, wid(7));
-        assert_eq!(restored.pending().unwrap().observed_frontier, BTreeSet::from([rid(100)]));
-        assert_eq!(restored.working_value().map(String::as_str), Some("durable-latest"));
+        assert_eq!(
+            restored.pending().unwrap().observed_frontier,
+            BTreeSet::from([rid(100)])
+        );
+        assert_eq!(
+            restored.working_value().map(String::as_str),
+            Some("durable-latest")
+        );
 
         let sealed = restored.seal(rid(200)).unwrap();
         assert_eq!(sealed.parents, BTreeSet::from([rid(100)]));
