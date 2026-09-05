@@ -8,13 +8,17 @@
 //! behind future modules rather than freezing them accidentally.
 
 pub mod error;
+pub mod finalization;
 pub mod id;
 pub mod merge;
 pub mod scalar;
 pub mod state;
+pub mod working;
 
 pub use error::CoreError;
-pub use id::{AtomId, ContinuumId, ReplicaId, RevisionId};
+pub use finalization::{FinalizationLedger, FinalizationSnapshot, FinalizedStatement};
+pub use id::{AtomId, ContinuumId, ReplicaId, RevisionId, WorkingEpochId};
 pub use merge::MergeState;
 pub use scalar::{ScalarRegister, ScalarRevision};
 pub use state::{AtomMap, ContinuumState};
+pub use working::{WorkingEpoch, WorkingScalar, WorkingSnapshot};
