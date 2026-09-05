@@ -44,6 +44,7 @@ pub enum CoreError {
     HandoffRequiresFinalizedRevision {
         revision_id: RevisionId,
     },
+    InvalidFinalizationSnapshot,
 }
 
 impl fmt::Display for CoreError {
@@ -97,6 +98,9 @@ impl fmt::Display for CoreError {
                 f,
                 "transport handoff depends on unfinalized local revision {revision_id:?}"
             ),
+            Self::InvalidFinalizationSnapshot => {
+                write!(f, "finalization snapshot contains inconsistent bookkeeping")
+            }
         }
     }
 }
