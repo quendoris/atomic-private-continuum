@@ -5,8 +5,9 @@ use std::path::Path;
 use apc_core::{AtomId, ContinuumId, RevisionId, ScalarRegister};
 use apc_crypto::ContentKey;
 use apc_sync::{
-    encode_scalar_projection, protect_scalar_part, DomainKey, MultipartInbox, ProtectedSyncPart,
-    PublicationId, ScalarDirtyDomainState, ScalarSyncProjection, SyncProjection,
+    decode_protected_sync_part, encode_protected_sync_part, encode_scalar_projection,
+    protect_scalar_part, DomainKey, MultipartInbox, PublicationId, ScalarDirtyDomainState,
+    ScalarSyncProjection, SyncProjection,
 };
 
 const TEST_KEY: [u8; 32] = [0x91; 32];
@@ -14,7 +15,7 @@ const TEST_KEY: [u8; 32] = [0x91; 32];
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        panic!("usage: apc-sync-process-worker <mode> <output> [left-payload right-payload]");
+        panic!("usage: apc-sync-process-worker <mode> <output> [left-part right-part]");
     }
 
     match args[1].as_str() {
@@ -46,7 +47,7 @@ fn require_merge_args(args: &[String]) {
     assert_eq!(
         args.len(),
         5,
-        "merge mode requires output, left payload and right payload"
+        "merge mode requires output, left part and right part"
     );
 }
 
@@ -54,10 +55,11 @@ fn emit(output: &Path, revision_id: u64, value: &[u8], publication_id: Publicati
     let projection = edited_projection(revision_id, value);
     let key = ContentKey::from_bytes(TEST_KEY);
     let part = protect_scalar_part(&key, cid(7), publication_id, 0, 1, &projection).unwrap();
-    fs::write(output, part.payload).unwrap();
+    let encoded = encode_protected_sync_part(&part).unwrap();
+    fs::write(output, encoded).unwrap();
 }
 
-fn merge(output: &Path, left_payload: &Path, right_payload: &Path, left_replica: bool) {
+fn merge(output: &Path, left_part: &Path, right_part: &Path, left_replica: bool) {
     let key = ContentKey::from_bytes(TEST_KEY);
     let continuum_id = cid(7);
     let baseline = baseline_projection();
@@ -70,18 +72,8 @@ fn merge(output: &Path, left_payload: &Path, right_payload: &Path, left_replica:
         locally_edit(&mut state, rid(20), b"right");
     }
 
-    let left = ProtectedSyncPart {
-        publication_id: pid(100),
-        part_index: 0,
-        total_parts: 1,
-        payload: fs::read(left_payload).unwrap(),
-    };
-    let right = ProtectedSyncPart {
-        publication_id: pid(200),
-        part_index: 0,
-        total_parts: 1,
-        payload: fs::read(right_payload).unwrap(),
-    };
+    let left = decode_protected_sync_part(&fs::read(left_part).unwrap()).unwrap();
+    let right = decode_protected_sync_part(&fs::read(right_part).unwrap()).unwrap();
 
     let mut inbox = MultipartInbox::new();
     let parts = if left_replica {
