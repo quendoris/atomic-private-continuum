@@ -40,30 +40,25 @@ The Rust core must not copy every research object merely because it exists in `r
 
 A research candidate enters `apc-core` only when its boundary is sufficiently understood to implement without freezing unresolved neighboring semantics.
 
-## 3. First implemented slice
+## 3. Implemented core slices
 
-The first core slice intentionally contains only:
-
-```text
-opaque typed logical IDs
-        |
-direct-frontier scalar causal state
-        |
-deterministic state merge
-        |
-validation and algebra tests
-```
+### 3.1 Typed opaque identities
 
 Implemented identifier types currently include:
 
 - `ContinuumId`;
 - `AtomId`;
 - `ReplicaId`;
-- `RevisionId`.
+- `RevisionId`;
+- `WorkingEpochId`.
 
 They are distinct Rust types even when their current byte representation is identical.
 
 The first implementation uses 256-bit opaque byte identities, consistent with the current logical design. Their byte magnitude has no temporal meaning. Canonical byte order is available only for explicitly specified deterministic tie-breaks.
+
+`WorkingEpochId` is intentionally device-local crash-recovery identity. It is not portable causal identity and never participates in merge ordering.
+
+### 3.2 Direct-frontier scalar causal state
 
 The initial scalar register stores immutable revisions with direct causal frontier parents. It implements the currently validated scalar rule:
 
@@ -77,6 +72,80 @@ The initial scalar register stores immutable revisions with direct causal fronti
 
 This in-memory representation is **not** the portable binary format and is **not** the final checkpoint/coverage representation.
 
+### 3.3 Continuum and atom state shell
+
+`ContinuumState<A>` and `AtomMap<A>` provide stable continuum/atom identity without freezing unresolved atom-domain internals.
+
+The shell already enforces:
+
+- distinct atom identities coexist;
+- shared atom identity delegates merge to the atom payload's `MergeState` implementation;
+- different `ContinuumId` values cannot merge;
+- local duplicate `AtomId` creation is rejected;
+- absence from `AtomMap` is not deletion semantics.
+
+Lifecycle, location, hierarchy and ordered-sequence semantics remain outside this shell until their research blockers are resolved.
+
+### 3.4 Durable working-state boundary
+
+`WorkingScalar<T>` now implements the validated separation:
+
+```text
+crash-safe local working state
+        !=
+portable causal revision
+```
+
+A working epoch captures the causal frontier actually observable when the epoch begins. Repeated durable value updates do not create portable revisions. Sealing converts the latest pending value into one revision using that captured frontier.
+
+If remote state is about to become semantically observable while local work is pending, the core requires a pre-observation seal. It does not allow the later remote frontier to be substituted as if the older local work had observed it.
+
+The current tests include 10,000 pending value updates coalescing into one causal revision and explicit preservation of true concurrency across a remote observation boundary.
+
+`WorkingSnapshot<T>` preserves pending value, `WorkingEpochId` and original observed frontier together for later crash-safe storage encoding.
+
+### 3.5 Finalization and exposure boundary
+
+`FinalizationLedger<T>` now tracks the distinction between:
+
+```text
+local causal identity
+        |
+finalized immutable statement
+        |
+transport handoff / external exposure
+```
+
+Finalization freezes the semantic statement (`RevisionId`, value and direct causal parents) but deliberately contains no signature or key-evolution construction yet.
+
+Finalization is idempotent for the same statement and rejects a rewritten statement under an already-finalized `RevisionId`.
+
+Transport handoff requires every locally owned causal identity in the transitive dependency closure to be finalized first. Exposure is recorded at handoff, not acknowledgement.
+
+`FinalizationSnapshot<T>` preserves finalized and exposed bookkeeping for crash recovery.
+
+### 3.6 Local scalar domain state machine
+
+`LocalScalarDomain<T>` composes the working and finalization layers so callers cannot accidentally seal a local revision without registering local ownership, or restore working state while forgetting finalization/exposure state.
+
+Its current path is:
+
+```text
+begin/update working epoch
+        |
+seal local revision
+        |
+register local causal identity
+        |
+optional finalize
+        |
+transport handoff marks exposure
+```
+
+Remote observation uses the same state machine and automatically registers any pre-observation local revision created during the apply boundary.
+
+This is still one scalar merge-domain implementation, not a general final atom type.
+
 ## 4. Important non-commitments
 
 Starting the core does not close the remaining research questions.
@@ -89,7 +158,7 @@ The following are deliberately not implemented as frozen production semantics ye
 - general strong multi-domain atomic mutation;
 - final causal-membership/checkpoint encoding;
 - native `.apc` binary layout;
-- local crash-safe storage layout;
+- local crash-safe physical storage layout;
 - concrete AEAD, nonce strategy or key hierarchy;
 - concrete per-replica signing/key-evolution primitive;
 - transport adapter API details;
@@ -123,11 +192,17 @@ Transport revision identifiers, platform session state and portable logical revi
 
 Untrusted or incomplete state must fail closed at the semantic boundary.
 
-The first scalar implementation therefore rejects:
+The current implementation rejects:
 
-- unknown direct parents when importing a complete register;
+- unknown direct parents when importing a complete scalar register;
 - causal cycles;
-- conflicting statements reusing the same `RevisionId`.
+- conflicting statements reusing the same `RevisionId`;
+- reuse of an already-known `RevisionId` when sealing local work;
+- remote semantic observation of dirty work without a pre-observation seal;
+- finalization of a revision not registered as local;
+- mutation of an already-finalized statement;
+- transport handoff that depends on an unfinalized local causal identity;
+- inconsistent finalization crash snapshots.
 
 A future baseline-aware capsule importer may legitimately accept a revision whose parent body is absent when that dependency is covered by an authenticated retained baseline/checkpoint. That behavior belongs to a different import boundary and must be explicit. The ordinary complete-state register must not silently guess that a missing parent is safe.
 
@@ -142,16 +217,7 @@ Every merge primitive promoted into the real core must have tests for the algebr
 
 It must also test domain-specific invariants and adversarial invalid state.
 
-The initial scalar suite covers:
-
-- causal successor precedence even when its ID sorts below an ancestor;
-- deterministic concurrent tie-break;
-- a post-merge join revision observing the complete concurrent frontier;
-- commutative, associative and idempotent merge on valid states;
-- stale-state merge not rolling back a causal descendant;
-- rejection of missing parents;
-- rejection of conflicting `RevisionId` reuse;
-- rejection of causal cycles.
+The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, and restoration of combined working/finalization snapshots.
 
 Reference-model differential/property testing should be added as soon as the Rust representation is broad enough to exchange deterministic test fixtures with the Python oracle.
 
@@ -169,11 +235,11 @@ Large attachment paths are a separate streaming problem and must not be benchmar
 
 The next core work should proceed in this order unless new experiments invalidate a boundary:
 
-1. **Identity + scalar causal primitive** — started in `apc-core`.
-2. **Core state shell** — `ContinuumState`, stable atom identity and declared merge-domain containers without freezing unresolved domain implementations.
-3. **Working-state boundary** — crash-safe working epoch model separated from portable causal revision finalization.
-4. **Finalization boundary** — reserved stable `RevisionId`, immutable finalized statement and exposure bookkeeping.
-5. **Portable storage abstraction** — durability contract and crash tests before selecting/finalizing the `.apc` physical encoding.
+1. **Identity + scalar causal primitive** — implemented.
+2. **Core state shell** — implemented for `ContinuumState` / `AtomMap`.
+3. **Working-state boundary** — implemented for scalar domains.
+4. **Finalization boundary** — implemented for scalar domains, without selecting cryptography.
+5. **Portable storage abstraction** — next: durability contract and crash/failure-injection tests before selecting/finalizing the `.apc` physical encoding.
 6. **Cryptographic protection** — select studied primitives and implement real authenticated protection; no fake security API should escape as production behavior.
 7. **Sync projection layer** — dirty-domain partial state, protected capsule boundary and baseline/dependency handling.
 8. **First transport adapter** — GitHub optimistic publication/retry above the generic protected sync interface.
