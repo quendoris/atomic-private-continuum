@@ -125,10 +125,7 @@ pub fn unprotect(
     }
 
     let version_offset = MAGIC.len();
-    let version = u16::from_be_bytes([
-        envelope[version_offset],
-        envelope[version_offset + 1],
-    ]);
+    let version = u16::from_be_bytes([envelope[version_offset], envelope[version_offset + 1]]);
     if version != VERSION {
         return Err(ProtectionError::UnsupportedVersion { version });
     }
@@ -151,8 +148,8 @@ pub fn unprotect(
             .try_into()
             .expect("fixed-length ciphertext length"),
     );
-    let ciphertext_len = usize::try_from(ciphertext_len_u64)
-        .map_err(|_| ProtectionError::LengthOverflow)?;
+    let ciphertext_len =
+        usize::try_from(ciphertext_len_u64).map_err(|_| ProtectionError::LengthOverflow)?;
     if ciphertext_len < TAG_BYTES {
         return Err(ProtectionError::InvalidEnvelope);
     }
