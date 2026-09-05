@@ -145,3 +145,39 @@ Splitting one logical publication into several transport files MUST NOT weaken c
 Repeated synchronization encryption/decryption is an expected foreground workload. Performance optimization may reduce redundant protection work, but MUST NOT bypass end-to-end protection merely to save CPU, battery or transport bytes.
 
 The concrete authenticated-encryption construction, nonce strategy, key hierarchy and replay/rollback treatment remain open until selected and tested. Reference-model test doubles that model an opaque transport boundary are not cryptographic implementations and MUST NOT be described as providing security.
+
+## 11. Current authenticated-protection implementation
+
+The first real symmetric protection implementation now exists in `crates/apc-crypto/`.
+
+It uses XChaCha20-Poly1305 with a 256-bit key, fresh 192-bit OS-generated nonce for each encryption and mandatory caller-supplied associated-data context.
+
+This choice is recorded in detail in `CRYPTO_PROTECTION.md`. It is a concrete implementation choice for the current Rust core, not yet a frozen portable-format algorithm identifier or complete key hierarchy.
+
+The extended nonce was selected specifically so independent offline replicas do not need a shared counter, wall clock or transport ordering merely to allocate safe nonces. Nonces remain public physical cryptographic inputs and carry no merge/time semantics.
+
+The current protected envelope:
+
+- rejects wrong keys and wrong contexts;
+- rejects nonce, ciphertext and authentication-tag modification;
+- rejects malformed, truncated or trailing envelope bytes;
+- returns no partial plaintext after authentication failure;
+- redacts owned key material from `Debug` output;
+- zeroizes the owned raw content-key buffer on drop.
+
+A real `LocalScalarSnapshot<Vec<u8>>` is now serialized by the pre-format recovery codec, protected by this AEAD layer, committed through the development filesystem durability backend, reopened, authenticated/decrypted, decoded and restored to the original core state in CI.
+
+The existing outer `APCDEV01` CRC framing is still only a development torn-write/corruption detector. It is not security and may be removed later.
+
+The following remain open and MUST NOT be inferred from the existence of the AEAD primitive:
+
+- password/passphrase KDF and unlock format;
+- content-key epoch registry and wrapping;
+- Android hardware-backed local key wrapping;
+- replica signing/key evolution;
+- trust enrollment and revocation;
+- replay/rollback protection;
+- final canonical AAD structures for native storage, capsules and chunks;
+- final portable protected-envelope encoding.
+
+AEAD authenticity does not imply freshness. Replaying an old but valid protected state remains a state/protocol problem.
