@@ -4,7 +4,7 @@
 
 A.P.C. is a cross-platform format and application core for atomic, encrypted, user-owned information.
 
-Status: architecture validation and pre-implementation core design.
+Status: core implementation started; architecture research remains active where the portable format is not yet frozen.
 
 ## Core properties
 
@@ -17,6 +17,12 @@ Status: architecture validation and pre-implementation core design.
 - platform-specific protection outside the portable core.
 
 The first implementation targets Android. Desktop and other platforms must remain compatible with the same format and core semantics.
+
+## Implementation
+
+The executable research/oracle models remain under [`reference_model/`](reference_model/).
+
+The real portable core is being implemented in Rust under [`crates/apc-core/`](crates/apc-core/). The current implementation contract and staging rules are documented in [`docs/CORE_IMPLEMENTATION.md`](docs/CORE_IMPLEMENTATION.md).
 
 ## Documentation
 
