@@ -4,13 +4,15 @@ This document records format-level decisions that are sufficiently stable to con
 
 ## 1. Native object
 
-An A.P.C. continuum is one portable native object.
+An A.P.C. continuum is one portable native object from the user's and format's point of view.
 
-The native representation MUST be self-contained and exportable as one `.apc` file. The same native object is also the unit stored by the initial GitHub synchronization transport.
+The native representation MUST be self-contained and exportable as one `.apc` file. Internal indexing, chunk tables, attachment regions or other structures may exist inside that single file. They do not change the one-object model.
 
-Internal indexing, chunk tables, attachment regions or other structures may exist inside that single file. They do not change the one-object model.
+The format must support efficient partial access and incremental durable update without treating the continuum as one semantically monolithic value.
 
-The format must therefore support efficient partial access and incremental update without treating the continuum as one semantically monolithic value.
+The complete native `.apc` file is **not** the mandatory unit of incremental synchronization. A synchronization transport may carry protected mergeable state capsules, attachment chunks or other transport-independent partial projections defined by A.P.C. sync semantics. A complete `.apc` may still be used for bootstrap when practical.
+
+Transport/provider limits, including GitHub limits, MUST NOT become native-format limits.
 
 ## 2. Atoms
 
