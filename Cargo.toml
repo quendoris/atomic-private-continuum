@@ -2,4 +2,5 @@
 resolver = "2"
 members = [
     "crates/apc-core",
+    "crates/apc-storage-fs",
 ]
