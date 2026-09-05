@@ -35,6 +35,7 @@ pub enum CoreError {
     UnexpectedPreObservationRevision {
         revision_id: RevisionId,
     },
+    InvalidWorkingSnapshot,
     UnknownLocalRevision {
         revision_id: RevisionId,
     },
@@ -89,6 +90,10 @@ impl fmt::Display for CoreError {
             Self::UnexpectedPreObservationRevision { revision_id } => write!(
                 f,
                 "pre-observation revision {revision_id:?} was supplied with no dirty working state"
+            ),
+            Self::InvalidWorkingSnapshot => write!(
+                f,
+                "working snapshot pending frontier does not match its causal recovery state"
             ),
             Self::UnknownLocalRevision { revision_id } => {
                 write!(f, "revision {revision_id:?} is not registered as local")
