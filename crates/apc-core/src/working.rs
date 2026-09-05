@@ -145,6 +145,12 @@ impl<T: Clone + Eq> WorkingScalar<T> {
 
     pub fn restore(snapshot: WorkingSnapshot<T>) -> Result<Self, CoreError> {
         snapshot.causal.validate()?;
+        if let Some(pending) = &snapshot.pending {
+            if pending.observed_frontier != snapshot.causal.frontier_ids() {
+                return Err(CoreError::InvalidWorkingSnapshot);
+            }
+        }
+
         Ok(Self {
             causal: snapshot.causal,
             pending: snapshot.pending,
@@ -275,6 +281,23 @@ mod tests {
 
         let sealed = restored.seal(rid(200)).unwrap();
         assert_eq!(sealed.parents, BTreeSet::from([rid(100)]));
+    }
+
+    #[test]
+    fn restore_rejects_pending_frontier_not_matching_causal_state() {
+        let snapshot = WorkingSnapshot {
+            causal: base(),
+            pending: Some(WorkingEpoch {
+                id: wid(1),
+                value: "forged".to_owned(),
+                observed_frontier: BTreeSet::from([rid(999)]),
+            }),
+        };
+
+        assert_eq!(
+            WorkingScalar::restore(snapshot).unwrap_err(),
+            CoreError::InvalidWorkingSnapshot
+        );
     }
 
     #[test]
