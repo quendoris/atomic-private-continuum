@@ -9,6 +9,7 @@
 mod codec;
 mod projection;
 mod protected;
+mod recovery;
 mod transport;
 mod wire;
 
@@ -20,6 +21,10 @@ pub use projection::{
 pub use protected::{
     protect_scalar_part, unprotect_scalar_part, MultipartInbox, ProtectedSyncPart, PublicationId,
     SyncPartError,
+};
+pub use recovery::{
+    decode_durable_sync_record, encode_durable_sync_record, DurableOutboxEntry, DurableSyncRecord,
+    SyncRecoveryError, TransportCursor,
 };
 pub use transport::{FetchOutcome, OpaqueTransport, PublishOutcome};
 pub use wire::{decode_protected_sync_part, encode_protected_sync_part, ProtectedPartCodecError};
