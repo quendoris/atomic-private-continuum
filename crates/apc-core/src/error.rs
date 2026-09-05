@@ -1,10 +1,13 @@
 use core::fmt;
 
-use crate::{AtomId, ContinuumId, RevisionId};
+use crate::{AtomId, ContinuumId, RevisionId, WorkingEpochId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
     DuplicateRevisionConflict {
+        revision_id: RevisionId,
+    },
+    RevisionAlreadyKnown {
         revision_id: RevisionId,
     },
     MissingParent {
@@ -21,6 +24,23 @@ pub enum CoreError {
         left: ContinuumId,
         right: ContinuumId,
     },
+    WorkingEpochAlreadyOpen {
+        epoch_id: WorkingEpochId,
+    },
+    NoWorkingEpoch,
+    DirtyObservationRequiresSeal,
+    UnexpectedPreObservationRevision {
+        revision_id: RevisionId,
+    },
+    UnknownLocalRevision {
+        revision_id: RevisionId,
+    },
+    FinalizedStatementConflict {
+        revision_id: RevisionId,
+    },
+    HandoffRequiresFinalizedRevision {
+        revision_id: RevisionId,
+    },
 }
 
 impl fmt::Display for CoreError {
@@ -28,6 +48,9 @@ impl fmt::Display for CoreError {
         match self {
             Self::DuplicateRevisionConflict { revision_id } => {
                 write!(f, "revision {revision_id:?} has conflicting statements")
+            }
+            Self::RevisionAlreadyKnown { revision_id } => {
+                write!(f, "revision identity {revision_id:?} is already known")
             }
             Self::MissingParent {
                 revision_id,
@@ -45,6 +68,28 @@ impl fmt::Display for CoreError {
             Self::ContinuumMismatch { left, right } => write!(
                 f,
                 "cannot merge different continua: left {left:?}, right {right:?}"
+            ),
+            Self::WorkingEpochAlreadyOpen { epoch_id } => {
+                write!(f, "working epoch {epoch_id:?} is already open")
+            }
+            Self::NoWorkingEpoch => write!(f, "no working epoch is open"),
+            Self::DirtyObservationRequiresSeal => {
+                write!(f, "dirty working state must be sealed before remote observation")
+            }
+            Self::UnexpectedPreObservationRevision { revision_id } => write!(
+                f,
+                "pre-observation revision {revision_id:?} was supplied with no dirty working state"
+            ),
+            Self::UnknownLocalRevision { revision_id } => {
+                write!(f, "revision {revision_id:?} is not registered as local")
+            }
+            Self::FinalizedStatementConflict { revision_id } => write!(
+                f,
+                "finalized statement for revision {revision_id:?} does not match"
+            ),
+            Self::HandoffRequiresFinalizedRevision { revision_id } => write!(
+                f,
+                "transport handoff depends on unfinalized local revision {revision_id:?}"
             ),
         }
     }
