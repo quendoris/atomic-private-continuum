@@ -146,6 +146,28 @@ Remote observation uses the same state machine and automatically registers any p
 
 This is still one scalar merge-domain implementation, not a general final atom type.
 
+### 3.7 Durability acknowledgement protocol
+
+`DurabilityBackend<S>` and `commit_durable()` now define the backend-independent local commit ordering:
+
+```text
+write complete candidate
+        |
+sync candidate data
+        |
+publish candidate as committed root
+        |
+sync committed root
+        |
+ACK success
+```
+
+The abstraction deliberately does not choose a filesystem layout, database, journal or `.apc` physical encoding.
+
+Crash-injection tests verify the contract around every boundary: before publication only the old root must remain visible; after unsynchronized publication either old or new complete state may survive; after the committed-root barrier the new state must survive; after `commit_durable()` returns success the old state must not reappear.
+
+The detailed contract is recorded in `DURABILITY.md`.
+
 ## 4. Important non-commitments
 
 Starting the core does not close the remaining research questions.
@@ -217,7 +239,7 @@ Every merge primitive promoted into the real core must have tests for the algebr
 
 It must also test domain-specific invariants and adversarial invalid state.
 
-The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, and restoration of combined working/finalization snapshots.
+The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, and the durability acknowledgement crash matrix.
 
 Reference-model differential/property testing should be added as soon as the Rust representation is broad enough to exchange deterministic test fixtures with the Python oracle.
 
@@ -239,7 +261,7 @@ The next core work should proceed in this order unless new experiments invalidat
 2. **Core state shell** — implemented for `ContinuumState` / `AtomMap`.
 3. **Working-state boundary** — implemented for scalar domains.
 4. **Finalization boundary** — implemented for scalar domains, without selecting cryptography.
-5. **Portable storage abstraction** — next: durability contract and crash/failure-injection tests before selecting/finalizing the `.apc` physical encoding.
+5. **Durability protocol abstraction** — implemented; concrete local filesystem backend and process-kill testing are next, while physical `.apc` encoding remains unfrozen.
 6. **Cryptographic protection** — select studied primitives and implement real authenticated protection; no fake security API should escape as production behavior.
 7. **Sync projection layer** — dirty-domain partial state, protected capsule boundary and baseline/dependency handling.
 8. **First transport adapter** — GitHub optimistic publication/retry above the generic protected sync interface.
