@@ -114,7 +114,7 @@ A physical commit must not restore `WorkingScalar` from one generation while res
 - `DurabilityBackend<S>` — the minimum backend operations required by the protocol;
 - `commit_durable()` — the ordering coordinator that returns success only after both durability barriers.
 
-The current tests use a crash-injecting in-memory backend. The simulator deliberately permits both legal outcomes for an unsynchronized root publication and verifies that:
+The core tests use a crash-injecting in-memory backend. The simulator deliberately permits both legal outcomes for an unsynchronized root publication and verifies that:
 
 - a volatile candidate never replaces the old committed state;
 - a durable but unpublished candidate never replaces the old committed state;
@@ -124,14 +124,47 @@ The current tests use a crash-injecting in-memory backend. The simulator deliber
 
 The simulator is not a production storage engine.
 
-## 8. Next implementation work
+## 8. Development Unix filesystem backend
+
+`crates/apc-storage-fs/` now provides the first concrete backend for exercising this contract against a real filesystem.
+
+It deliberately stores opaque byte snapshots rather than defining the `.apc` format. The current single-writer development layout is:
+
+```text
+store/
+├── root
+├── root.next          transient publication manifest
+└── objects/
+    ├── candidate-00000000000000000000.bin
+    ├── candidate-00000000000000000001.bin
+    └── ...
+```
+
+Candidate numbers are local physical bookkeeping only. They have no portable meaning, do not participate in merge and are not clocks.
+
+The current Unix implementation performs:
+
+1. create and write an immutable candidate file;
+2. `sync_all` the candidate file;
+3. `sync_all` the objects directory so the new directory entry is durable;
+4. write and `sync_all` `root.next`;
+5. atomically rename `root.next` to `root`;
+6. `sync_all` the containing store directory before returning success.
+
+The backend fails closed on an invalid root manifest and ignores durable-but-unpublished candidate objects when reopening.
+
+Current CI tests verify successful commit/reopen, ignored unpublished candidates, replacement by a later commit without rewriting older candidate objects, root-manifest validation and restart-safe local candidate-name allocation.
+
+This backend is intentionally Unix-only at this stage and is not production storage. Its purpose is to validate the durability contract on the same broad filesystem model used by Linux desktop development and, later, Android test targets. Platform-specific behavior still requires direct testing.
+
+## 9. Next implementation work
 
 Before freezing any `.apc` physical encoding, the next storage work should establish:
 
-1. a concrete local filesystem backend for development;
-2. deterministic encoding for the recovery object used by that backend, explicitly marked pre-format while unstable;
-3. fault injection around every write, flush, publication and reopen boundary;
-4. process-kill tests on desktop;
+1. deterministic encoding for the complete recovery object, explicitly marked pre-format while unstable;
+2. fault injection around concrete filesystem write, flush, publication and reopen boundaries;
+3. subprocess/process-kill tests on desktop;
+4. orphan-candidate reclamation that cannot affect committed semantics;
 5. Android filesystem tests through ADB once the first native binding/test harness exists;
 6. verification that successful acknowledgement survives actual process death and device restart conditions supported by the test environment.
 
