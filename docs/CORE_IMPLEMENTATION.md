@@ -27,6 +27,7 @@ The repository now contains deliberately different executable layers:
 ```text
 reference_model/          Python research/oracle models
 crates/apc-core/          portable semantic core
+crates/apc-crypto/        real authenticated protection primitive
 crates/apc-storage-fs/    development Unix durability backend
 ```
 
@@ -37,11 +38,11 @@ The Python reference model remains valuable after Rust implementation begins. It
 - provide an intentionally explicit correctness oracle for selected semantics;
 - compare candidate compact representations before they become core commitments.
 
-The Rust core must not copy every research object merely because it exists in `reference_model/`.
+The Rust semantic core must not copy every research object merely because it exists in `reference_model/`.
 
-A research candidate enters `apc-core` only when its boundary is sufficiently understood to implement without freezing unresolved neighboring semantics.
+A research candidate enters production-facing Rust code only when its boundary is sufficiently understood to implement without freezing unresolved neighboring semantics.
 
-Concrete storage and transport adapters remain outside portable merge semantics even when they are implemented in Rust and live in the same workspace.
+Concrete cryptography, storage and transport adapters remain separated from merge semantics even when they are implemented in Rust and live in the same workspace.
 
 ## 3. Implemented core slices
 
@@ -105,7 +106,7 @@ If remote state is about to become semantically observable while local work is p
 
 The current tests include 10,000 pending value updates coalescing into one causal revision and explicit preservation of true concurrency across a remote observation boundary.
 
-`WorkingSnapshot<T>` preserves pending value, `WorkingEpochId` and original observed frontier together for crash recovery. Restore now also rejects a pending frontier that does not match the causal state stored in the same recovery object; a malformed snapshot cannot be accepted and later sealed into invented ancestry.
+`WorkingSnapshot<T>` preserves pending value, `WorkingEpochId` and original observed frontier together for crash recovery. Restore also rejects a pending frontier that does not match the causal state stored in the same recovery object; malformed recovery state cannot later be sealed into invented ancestry.
 
 ### 3.5 Finalization and exposure boundary
 
@@ -119,7 +120,7 @@ finalized immutable statement
 transport handoff / external exposure
 ```
 
-Finalization freezes the semantic statement (`RevisionId`, value and direct causal parents) but deliberately contains no signature or key-evolution construction yet.
+Finalization freezes the semantic statement (`RevisionId`, value and direct causal parents) but deliberately contains no signature or replica key-evolution construction yet.
 
 Finalization is idempotent for the same statement and rejects a rewritten statement under an already-finalized `RevisionId`.
 
@@ -175,15 +176,61 @@ It persists immutable candidate objects and publishes one candidate through a sm
 
 The backend is single-writer for now and deliberately keeps local candidate numbering outside logical semantics.
 
-Candidate files use a temporary deterministic `APCDEV01` recovery envelope with payload length and CRC-32 so truncation and accidental corruption fail closed. The CRC is only a development corruption detector: it is not authentication and is not a substitute for the future AEAD boundary.
+Candidate files use a temporary deterministic `APCDEV01` recovery envelope with payload length and CRC-32 so truncation and accidental corruption fail closed. The CRC is only a development corruption detector and is not security.
 
 A second explicitly pre-format codec serializes `LocalScalarSnapshot<Vec<u8>>` deterministically. It preserves causal revisions, a pending working epoch and its observed frontier, local revision ownership, finalized statements, exposure and handoff bookkeeping as one recovery object. The codec validates the core state before encoding and after decoding.
 
-A concrete filesystem test now persists a real local scalar domain containing finalized/exposed state plus a later pending draft, closes the backend, reopens it and restores a domain equal to the original. This is the first real core recovery state to cross the physical durability path rather than a test string.
+A concrete filesystem test persists a real local scalar domain containing finalized/exposed state plus a later pending draft, closes the backend, reopens it and restores a domain equal to the original.
 
-A separate subprocess worker is also force-killed after candidate write, candidate sync, root publication, committed-root sync and the acknowledgement path. The parent then independently reopens the store and checks the recovered state. This validates real process death while preserving the important distinction that process death is not the same as power loss.
+A separate subprocess worker is force-killed after candidate write, candidate sync, root publication, committed-root sync and the acknowledgement path. The parent independently reopens the store and checks the recovered state. This validates real process death while preserving the important distinction that process death is not power loss.
 
 The detailed durability contract and physical-development status are recorded in `DURABILITY.md`.
+
+### 3.9 Real authenticated protection
+
+`apc-crypto` now provides the first real cryptographic protection boundary.
+
+The current implementation uses XChaCha20-Poly1305 with:
+
+- a 256-bit content-protection key;
+- a fresh OS-generated 192-bit nonce for each encryption;
+- mandatory caller-provided associated-data context;
+- strict pre-format envelope parsing;
+- owned raw key bytes zeroized on drop and redacted from `Debug`.
+
+The extended nonce avoids introducing a global nonce counter, wall clock or transport-order dependency across independent offline replicas.
+
+The low-level protection API deliberately does not implement passwords, Android key wrapping, replica signatures, transport credentials, replay/rollback policy or merge semantics.
+
+Tests reject wrong keys, wrong contexts, nonce/ciphertext/tag modification, malformed headers, truncation and trailing bytes. Authentication failure returns no partial plaintext.
+
+The algorithm/envelope is not yet frozen as the permanent portable format. `CRYPTO_PROTECTION.md` records the rationale, standardization caveat and requirement for independent interoperability testing before format freeze.
+
+A full development local recovery path is now executable:
+
+```text
+LocalScalarDomain
+        |
+LocalScalarSnapshot
+        |
+pre-format deterministic scalar encoding
+        |
+XChaCha20-Poly1305 authenticated protection
+        |
+development filesystem recovery framing
+        |
+durable candidate/root commit
+        |
+close + reopen
+        |
+authenticate/decrypt
+        |
+decode + core validation
+        |
+restored LocalScalarDomain
+```
+
+The integration test also verifies that sensitive draft plaintext is not present in the protected bytes written into the filesystem payload and that the same bytes cannot be authenticated under a different recovery context.
 
 ## 4. Important non-commitments
 
@@ -198,8 +245,11 @@ The following are deliberately not implemented as frozen production semantics ye
 - final causal-membership/checkpoint encoding;
 - native `.apc` binary layout;
 - production local crash-safe physical storage layout;
-- concrete AEAD, nonce strategy or key hierarchy;
+- final portable AEAD/envelope algorithm commitment and content-key epoch registry;
+- password/passphrase KDF and portable unlock/wrapping format;
+- Android hardware-backed local key wrapping;
 - concrete per-replica signing/key-evolution primitive;
+- replay/rollback policy;
 - transport adapter API details;
 - Android/desktop bindings.
 
@@ -223,13 +273,13 @@ sync projection interfaces
 platform / transport bindings outside core semantics
 ```
 
-The core must not import GitHub concepts, Android lifecycle concepts, UI coordinates or platform keystore identities into its logical types.
+The semantic core must not import GitHub concepts, Android lifecycle concepts, UI coordinates or platform keystore identities into its logical types.
 
-Transport revision identifiers, platform session state and portable logical revision identities remain separate types and layers.
+Transport revision identifiers, platform session state, cryptographic nonces and portable logical revision identities remain separate types and layers.
 
 ## 6. Validation rule
 
-Untrusted or incomplete state must fail closed at the semantic boundary.
+Untrusted or incomplete state must fail closed at the semantic/protection boundary.
 
 The current implementation rejects:
 
@@ -245,7 +295,10 @@ The current implementation rejects:
 - inconsistent finalization crash snapshots;
 - invalid development filesystem root manifests;
 - truncated or corrupted development candidate envelopes;
-- malformed, truncated, duplicate or structurally invalid pre-format scalar recovery snapshots.
+- malformed, truncated, duplicate or structurally invalid pre-format scalar recovery snapshots;
+- empty AEAD context;
+- wrong AEAD key/context and authenticated-byte modification;
+- malformed, truncated or trailing protected-envelope data.
 
 A future baseline-aware capsule importer may legitimately accept a revision whose parent body is absent when that dependency is covered by an authenticated retained baseline/checkpoint. That behavior belongs to a different import boundary and must be explicit. The ordinary complete-state register must not silently guess that a missing parent is safe.
 
@@ -260,9 +313,11 @@ Every merge primitive promoted into the real core must have tests for the algebr
 
 It must also test domain-specific invariants and adversarial invalid state.
 
-The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, the abstract durability crash matrix, deterministic recovery encoding, corruption rejection, a real complete scalar filesystem round-trip and a real subprocess-kill matrix.
+The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, the abstract durability crash matrix, deterministic recovery encoding, corruption rejection, a real subprocess-kill matrix, authenticated-encryption tamper/context/key rejection and an AEAD-protected real scalar filesystem round-trip.
 
 Reference-model differential/property testing should be added as soon as the Rust representation is broad enough to exchange deterministic test fixtures with the Python oracle.
+
+Independent XChaCha20-Poly1305 interoperability fixtures must be added before portable protection encoding is frozen.
 
 ## 8. Performance posture
 
@@ -270,9 +325,11 @@ Correctness comes before low-level optimization in the first core pass.
 
 The initial scalar implementation may use straightforward graph walks. It must not introduce clocks, counters with hidden semantic ordering, lossy ancestry guesses or early format commitments merely to optimize an in-memory prototype.
 
+Repeated AEAD protection/deprotection is expected foreground work and must eventually be benchmarked, but protection must not be bypassed to save CPU, battery or bytes.
+
 Once oracle parity is established, benchmarks may identify hot paths and justify indexes, caches or compact representations that preserve exactly the same logical result.
 
-Large attachment paths are a separate streaming problem and must not be benchmarked by loading complete binaries into this scalar model.
+Large attachment paths are a separate streaming/chunk-protection problem and must not be benchmarked by loading complete binaries into the scalar model.
 
 ## 9. Immediate implementation sequence
 
@@ -281,10 +338,10 @@ The next core work should proceed in this order unless new experiments invalidat
 1. **Identity + scalar causal primitive** — implemented.
 2. **Core state shell** — implemented for `ContinuumState` / `AtomMap`.
 3. **Working-state boundary** — implemented for scalar domains.
-4. **Finalization boundary** — implemented for scalar domains, without selecting cryptography.
-5. **Durability protocol + development filesystem backend** — substantially implemented, including pre-format recovery encoding, real scalar recovery and subprocess-kill testing. Concrete filesystem failure injection, repeated stress and safe orphan reclamation remain before this backend can be considered production-oriented.
-6. **Cryptographic protection** — next stable semantic layer to design and implement with studied primitives; development CRC framing must not escape as security behavior.
-7. **Sync projection layer** — dirty-domain partial state, protected capsule boundary and baseline/dependency handling.
+4. **Finalization boundary** — implemented for scalar domains, without selecting replica signing cryptography.
+5. **Durability protocol + development filesystem backend** — substantially implemented, including pre-format recovery encoding, real scalar recovery and subprocess-kill testing. Concrete filesystem failure injection, repeated stress and safe orphan reclamation remain.
+6. **Authenticated symmetric protection** — first real XChaCha20-Poly1305 implementation and protected recovery integration implemented; final key hierarchy/portable encoding/interoperability remain open.
+7. **Sync projection layer** — next stable core direction: remove remaining research-only projection identity ordering, define dirty-domain protected projection boundaries and baseline/dependency handling without freezing unresolved checkpoint encoding.
 8. **First transport adapter** — GitHub optimistic publication/retry above the generic protected sync interface.
 9. **Android binding + minimal Continuum client** — after the core can create, persist, reload, protect and deterministically merge a small real continuum.
 
@@ -303,5 +360,7 @@ A.P.C. Core reaches its first meaningful executable milestone when two independe
 5. merge in either order;
 6. produce the same logical result;
 7. detect corrupt, incomplete or conflicting protected state rather than guessing.
+
+The current implementation has now demonstrated most of the single-process/local-storage half of this milestone, including real authenticated protection. The remaining milestone-critical work is primarily protected cross-process projection exchange, deterministic merge through that exchange and the transport-independent capsule/dependency boundary.
 
 Only then does the first Android editor become an integration client of an existing core rather than the place where core semantics are invented.
