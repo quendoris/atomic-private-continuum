@@ -91,7 +91,7 @@ Lifecycle, location, hierarchy and ordered-sequence semantics remain outside thi
 
 ### 3.4 Durable working-state boundary
 
-`WorkingScalar<T>` now implements the validated separation:
+`WorkingScalar<T>` implements the validated separation:
 
 ```text
 crash-safe local working state
@@ -105,11 +105,11 @@ If remote state is about to become semantically observable while local work is p
 
 The current tests include 10,000 pending value updates coalescing into one causal revision and explicit preservation of true concurrency across a remote observation boundary.
 
-`WorkingSnapshot<T>` preserves pending value, `WorkingEpochId` and original observed frontier together for later crash-safe storage encoding.
+`WorkingSnapshot<T>` preserves pending value, `WorkingEpochId` and original observed frontier together for crash recovery. Restore now also rejects a pending frontier that does not match the causal state stored in the same recovery object; a malformed snapshot cannot be accepted and later sealed into invented ancestry.
 
 ### 3.5 Finalization and exposure boundary
 
-`FinalizationLedger<T>` now tracks the distinction between:
+`FinalizationLedger<T>` tracks the distinction between:
 
 ```text
 local causal identity
@@ -167,15 +167,21 @@ ACK success
 
 Crash-injection tests verify the contract around every boundary: before publication only the old root must remain visible; after unsynchronized publication either old or new complete state may survive; after the committed-root barrier the new state must survive; after `commit_durable()` returns success the old state must not reappear.
 
-### 3.8 Development filesystem backend
+### 3.8 Development filesystem backend and recovery path
 
 `apc-storage-fs` is the first concrete implementation of the durability contract. It is intentionally a development Unix backend, not the native `.apc` format.
 
-It persists opaque byte snapshots as immutable candidates and publishes one candidate through a small root manifest. Candidate file and directory entries are synchronized before publication; the replacement root manifest is synchronized before rename; the containing directory is synchronized before commit acknowledgement.
+It persists immutable candidate objects and publishes one candidate through a small root manifest. Candidate file and directory entries are synchronized before publication; the replacement root manifest is synchronized before rename; the containing directory is synchronized before commit acknowledgement.
 
 The backend is single-writer for now and deliberately keeps local candidate numbering outside logical semantics.
 
-The current tests verify commit/reopen, durable-but-unpublished candidate isolation, later-root replacement without rewriting prior candidates, fail-closed root-manifest validation and restart-safe local candidate allocation.
+Candidate files use a temporary deterministic `APCDEV01` recovery envelope with payload length and CRC-32 so truncation and accidental corruption fail closed. The CRC is only a development corruption detector: it is not authentication and is not a substitute for the future AEAD boundary.
+
+A second explicitly pre-format codec serializes `LocalScalarSnapshot<Vec<u8>>` deterministically. It preserves causal revisions, a pending working epoch and its observed frontier, local revision ownership, finalized statements, exposure and handoff bookkeeping as one recovery object. The codec validates the core state before encoding and after decoding.
+
+A concrete filesystem test now persists a real local scalar domain containing finalized/exposed state plus a later pending draft, closes the backend, reopens it and restores a domain equal to the original. This is the first real core recovery state to cross the physical durability path rather than a test string.
+
+A separate subprocess worker is also force-killed after candidate write, candidate sync, root publication, committed-root sync and the acknowledgement path. The parent then independently reopens the store and checks the recovered state. This validates real process death while preserving the important distinction that process death is not the same as power loss.
 
 The detailed durability contract and physical-development status are recorded in `DURABILITY.md`.
 
@@ -232,11 +238,14 @@ The current implementation rejects:
 - conflicting statements reusing the same `RevisionId`;
 - reuse of an already-known `RevisionId` when sealing local work;
 - remote semantic observation of dirty work without a pre-observation seal;
+- inconsistent recovered pending working frontiers;
 - finalization of a revision not registered as local;
 - mutation of an already-finalized statement;
 - transport handoff that depends on an unfinalized local causal identity;
 - inconsistent finalization crash snapshots;
-- invalid development filesystem root manifests.
+- invalid development filesystem root manifests;
+- truncated or corrupted development candidate envelopes;
+- malformed, truncated, duplicate or structurally invalid pre-format scalar recovery snapshots.
 
 A future baseline-aware capsule importer may legitimately accept a revision whose parent body is absent when that dependency is covered by an authenticated retained baseline/checkpoint. That behavior belongs to a different import boundary and must be explicit. The ordinary complete-state register must not silently guess that a missing parent is safe.
 
@@ -251,7 +260,7 @@ Every merge primitive promoted into the real core must have tests for the algebr
 
 It must also test domain-specific invariants and adversarial invalid state.
 
-The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, the abstract durability crash matrix and real Unix filesystem reopen behavior.
+The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, the abstract durability crash matrix, deterministic recovery encoding, corruption rejection, a real complete scalar filesystem round-trip and a real subprocess-kill matrix.
 
 Reference-model differential/property testing should be added as soon as the Rust representation is broad enough to exchange deterministic test fixtures with the Python oracle.
 
@@ -273,11 +282,11 @@ The next core work should proceed in this order unless new experiments invalidat
 2. **Core state shell** — implemented for `ContinuumState` / `AtomMap`.
 3. **Working-state boundary** — implemented for scalar domains.
 4. **Finalization boundary** — implemented for scalar domains, without selecting cryptography.
-5. **Durability protocol + development filesystem backend** — implemented; pre-format recovery encoding, concrete fault injection and process-kill testing are next.
-6. **Cryptographic protection** — select studied primitives and implement real authenticated protection; no fake security API should escape as production behavior.
+5. **Durability protocol + development filesystem backend** — substantially implemented, including pre-format recovery encoding, real scalar recovery and subprocess-kill testing. Concrete filesystem failure injection, repeated stress and safe orphan reclamation remain before this backend can be considered production-oriented.
+6. **Cryptographic protection** — next stable semantic layer to design and implement with studied primitives; development CRC framing must not escape as security behavior.
 7. **Sync projection layer** — dirty-domain partial state, protected capsule boundary and baseline/dependency handling.
 8. **First transport adapter** — GitHub optimistic publication/retry above the generic protected sync interface.
-9. **Android binding + minimal Continuum client** — only after the core can create, persist, reload and deterministically merge a small real continuum.
+9. **Android binding + minimal Continuum client** — after the core can create, persist, reload, protect and deterministically merge a small real continuum.
 
 Sequence, hierarchy and lifecycle work can enter earlier if their research blockers are resolved, but they must not hold the entire core hostage: the implementation should be modular enough to advance stable layers independently.
 
