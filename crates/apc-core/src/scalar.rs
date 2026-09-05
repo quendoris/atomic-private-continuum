@@ -128,9 +128,7 @@ impl<T: Clone + Eq> ScalarRegister<T> {
         for (id, revision) in &other.revisions {
             match merged.get(id) {
                 Some(existing) if existing == revision => {}
-                Some(_) => {
-                    return Err(CoreError::DuplicateRevisionConflict { revision_id: *id })
-                }
+                Some(_) => return Err(CoreError::DuplicateRevisionConflict { revision_id: *id }),
                 None => {
                     merged.insert(*id, revision.clone());
                 }
@@ -307,7 +305,10 @@ mod tests {
         joined.assign(rid(2), "joined").unwrap();
 
         assert_eq!(joined.frontier_ids(), BTreeSet::from([rid(2)]));
-        assert_eq!(joined.revision(rid(2)).unwrap().parents, BTreeSet::from([rid(800), rid(900)]));
+        assert_eq!(
+            joined.revision(rid(2)).unwrap().parents,
+            BTreeSet::from([rid(800), rid(900)])
+        );
         assert_eq!(joined.materialized(), Some(&"joined"));
     }
 
@@ -339,8 +340,14 @@ mod tests {
         let mut current = old.clone();
         current.assign(rid(10), "current").unwrap();
 
-        assert_eq!(current.merge(&old).unwrap().materialized(), Some(&"current"));
-        assert_eq!(old.merge(&current).unwrap().materialized(), Some(&"current"));
+        assert_eq!(
+            current.merge(&old).unwrap().materialized(),
+            Some(&"current")
+        );
+        assert_eq!(
+            old.merge(&current).unwrap().materialized(),
+            Some(&"current")
+        );
     }
 
     #[test]
@@ -359,12 +366,9 @@ mod tests {
 
     #[test]
     fn conflicting_reuse_of_revision_id_is_rejected() {
-        let left = ScalarRegister::from_revisions([ScalarRevision::new(
-            rid(1),
-            "left",
-            BTreeSet::new(),
-        )])
-        .unwrap();
+        let left =
+            ScalarRegister::from_revisions([ScalarRevision::new(rid(1), "left", BTreeSet::new())])
+                .unwrap();
         let right = ScalarRegister::from_revisions([ScalarRevision::new(
             rid(1),
             "right",
