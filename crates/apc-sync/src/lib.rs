@@ -9,6 +9,7 @@
 mod codec;
 mod projection;
 mod protected;
+mod wire;
 
 pub use codec::{decode_scalar_projection, encode_scalar_projection, SyncCodecError};
 pub use projection::{
@@ -18,4 +19,7 @@ pub use projection::{
 pub use protected::{
     protect_scalar_part, unprotect_scalar_part, MultipartInbox, ProtectedSyncPart, PublicationId,
     SyncPartError,
+};
+pub use wire::{
+    decode_protected_sync_part, encode_protected_sync_part, ProtectedPartCodecError,
 };
