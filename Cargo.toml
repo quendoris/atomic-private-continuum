@@ -4,4 +4,5 @@ members = [
     "crates/apc-core",
     "crates/apc-crypto",
     "crates/apc-storage-fs",
+    "crates/apc-sync",
 ]
