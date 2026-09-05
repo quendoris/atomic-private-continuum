@@ -1,0 +1,11 @@
+[package]
+name = "apc-sync"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Transport-independent synchronization projections for Atomic Private Continuum"
+publish = false
+
+[dependencies]
+apc-core = { path = "../apc-core" }
+apc-crypto = { path = "../apc-crypto" }
