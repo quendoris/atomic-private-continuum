@@ -39,11 +39,7 @@ fn baseline_projection() -> ScalarSyncProjection {
     SyncProjection::from_domains([(body_key(), register)].into_iter().collect())
 }
 
-fn locally_edit(
-    state: &mut ScalarDirtyDomainState,
-    revision_id: RevisionId,
-    value: &[u8],
-) {
+fn locally_edit(state: &mut ScalarDirtyDomainState, revision_id: RevisionId, value: &[u8]) {
     let key = body_key();
     let mut register = state.get(&key).unwrap().clone();
     register.assign(revision_id, value.to_vec()).unwrap();
@@ -81,15 +77,8 @@ fn two_replicas_exchange_protected_state_in_opposite_orders_and_converge() {
     let left_projection = left.export_dirty().unwrap();
     let right_projection = right.export_dirty().unwrap();
 
-    let left_part = protect_scalar_part(
-        &content_key,
-        continuum_id,
-        pid(100),
-        0,
-        1,
-        &left_projection,
-    )
-    .unwrap();
+    let left_part =
+        protect_scalar_part(&content_key, continuum_id, pid(100), 0, 1, &left_projection).unwrap();
     let right_part = protect_scalar_part(
         &content_key,
         continuum_id,
@@ -144,9 +133,6 @@ fn two_replicas_exchange_protected_state_in_opposite_orders_and_converge() {
     assert!(right.dirty_keys().is_empty());
 
     let register = left.get(&body_key()).unwrap();
-    assert_eq!(
-        register.frontier_ids(),
-        BTreeSet::from([rid(10), rid(20)])
-    );
+    assert_eq!(register.frontier_ids(), BTreeSet::from([rid(10), rid(20)]));
     assert_eq!(register.materialized(), Some(&b"right".to_vec()));
 }
