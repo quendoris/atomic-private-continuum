@@ -8,6 +8,7 @@
 //! behind future modules rather than freezing them accidentally.
 
 pub mod domain;
+pub mod durability;
 pub mod error;
 pub mod finalization;
 pub mod id;
@@ -17,6 +18,7 @@ pub mod state;
 pub mod working;
 
 pub use domain::{LocalScalarDomain, LocalScalarSnapshot};
+pub use durability::{commit_durable, DurabilityBackend};
 pub use error::CoreError;
 pub use finalization::{FinalizationLedger, FinalizationSnapshot, FinalizedStatement};
 pub use id::{AtomId, ContinuumId, ReplicaId, RevisionId, WorkingEpochId};
