@@ -9,8 +9,12 @@
 
 pub mod error;
 pub mod id;
+pub mod merge;
 pub mod scalar;
+pub mod state;
 
 pub use error::CoreError;
 pub use id::{AtomId, ContinuumId, ReplicaId, RevisionId};
+pub use merge::MergeState;
 pub use scalar::{ScalarRegister, ScalarRevision};
+pub use state::{AtomMap, ContinuumState};
