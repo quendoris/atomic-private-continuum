@@ -43,10 +43,9 @@ opaque_id!(AtomId);
 opaque_id!(ReplicaId);
 opaque_id!(RevisionId);
 
-/// Device-local crash-recovery identity for one pending working epoch.
-///
-/// This identity is deliberately distinct from `RevisionId`. It is not portable
-/// causal identity and must never participate in merge ordering.
+// Device-local crash-recovery identity for one pending working epoch. This is
+// deliberately distinct from `RevisionId`: it is not portable causal identity
+// and must never participate in merge ordering.
 opaque_id!(WorkingEpochId);
 
 #[cfg(test)]
