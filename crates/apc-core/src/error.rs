@@ -4,12 +4,16 @@ use crate::RevisionId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
-    DuplicateRevisionConflict { revision_id: RevisionId },
+    DuplicateRevisionConflict {
+        revision_id: RevisionId,
+    },
     MissingParent {
         revision_id: RevisionId,
         parent_id: RevisionId,
     },
-    CausalCycle { revision_id: RevisionId },
+    CausalCycle {
+        revision_id: RevisionId,
+    },
 }
 
 impl fmt::Display for CoreError {
