@@ -4,7 +4,7 @@
 
 A.P.C. is a cross-platform format and application core for atomic, encrypted, user-owned information.
 
-Status: architecture and format design.
+Status: architecture validation and pre-implementation core design.
 
 ## Core properties
 
@@ -20,8 +20,10 @@ The first implementation targets Android. Desktop and other platforms must remai
 
 ## Documentation
 
-Architecture, format, security, synchronization and continuity requirements are kept under [`docs/`](docs/).
+Architecture, format, security, synchronization, continuity requirements and the current implementation handoff are kept under [`docs/`](docs/).
+
+The current architectural synthesis is [`docs/ARCHITECTURE_STATE.md`](docs/ARCHITECTURE_STATE.md).
 
 ## License
 
-A.P.C. is intended to be free and open-source. The license has not been selected yet; until one is added, this repository does not grant reuse rights beyond those provided by law.
+A.P.C. is licensed under the **GNU General Public License v3.0 or later** (`GPL-3.0-or-later`). See [`LICENSE`](LICENSE).
