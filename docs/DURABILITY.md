@@ -107,6 +107,8 @@ A physical commit must not restore `WorkingScalar` from one generation while res
 
 `LocalScalarSnapshot<T>` exists specifically so those already-validated boundaries can be persisted as one recovery unit.
 
+The current scalar implementation also validates that a recovered pending epoch still names exactly the causal frontier represented by the same recovery snapshot. A forged or torn snapshot must not be accepted and later converted into a revision with invented or missing ancestry.
+
 ## 7. Current Rust boundary
 
 `crates/apc-core/src/durability.rs` defines:
@@ -126,9 +128,9 @@ The simulator is not a production storage engine.
 
 ## 8. Development Unix filesystem backend
 
-`crates/apc-storage-fs/` now provides the first concrete backend for exercising this contract against a real filesystem.
+`crates/apc-storage-fs/` provides the first concrete backend for exercising this contract against a real filesystem.
 
-It deliberately stores opaque byte snapshots rather than defining the `.apc` format. The current single-writer development layout is:
+It deliberately stores development recovery objects rather than defining the `.apc` format. The current single-writer layout is:
 
 ```text
 store/
@@ -153,19 +155,73 @@ The current Unix implementation performs:
 
 The backend fails closed on an invalid root manifest and ignores durable-but-unpublished candidate objects when reopening.
 
-Current CI tests verify successful commit/reopen, ignored unpublished candidates, replacement by a later commit without rewriting older candidate objects, root-manifest validation and restart-safe local candidate-name allocation.
+### 8.1 Development recovery envelope
 
-This backend is intentionally Unix-only at this stage and is not production storage. Its purpose is to validate the durability contract on the same broad filesystem model used by Linux desktop development and, later, Android test targets. Platform-specific behavior still requires direct testing.
+Candidate files are no longer raw opaque bytes. They are wrapped in a deterministic development envelope before being written:
+
+```text
+magic = APCDEV01
+version
+payload length
+payload
+CRC-32
+```
+
+The envelope detects truncation, trailing bytes and accidental candidate corruption before returning a committed payload.
+
+The CRC is **not** authentication and is not part of the future security design. It exists only as a development torn-write/corruption detector until authenticated encryption becomes the storage boundary. A checksum-valid malicious modification remains untrusted input and must never be considered authenticated A.P.C. state.
+
+This envelope is explicitly not the native `.apc` format and may be replaced without compatibility promises before format freeze.
+
+### 8.2 First complete scalar recovery encoding
+
+The storage crate also contains an explicitly pre-format deterministic codec for `LocalScalarSnapshot<Vec<u8>>`.
+
+It serializes the already-implemented scalar recovery boundary as one unit:
+
+```text
+causal scalar revisions
+pending WorkingEpoch, if any
+captured observed frontier
+local revision ownership
+finalized immutable statements
+exposed local revision IDs
+handed-off local revision IDs
+```
+
+The codec validates a complete snapshot through the core both before encoding and after decoding. Unknown/missing causal structure, inconsistent working-state recovery metadata, inconsistent finalization bookkeeping, malformed lengths, duplicate set members, unsupported versions, truncation and trailing bytes fail closed.
+
+A test now constructs a real `LocalScalarDomain<Vec<u8>>` containing finalized/exposed state plus a later pending draft, writes the encoded snapshot through the filesystem durability backend, closes the backend, reopens it, decodes the snapshot and restores a domain equal to the original.
+
+This is the first point at which real A.P.C. core recovery state, rather than a test string, survives a concrete filesystem commit/reopen cycle.
+
+### 8.3 Real subprocess-kill matrix
+
+`crates/apc-storage-fs/tests/process_kill.rs` executes the filesystem backend in a separate worker process and force-kills that process after these boundaries:
+
+```text
+after candidate write
+after candidate sync
+after root publication
+after committed-root sync
+after commit acknowledgement path returns
+```
+
+The parent process then reopens the store independently and checks the recovered state against the logical crash matrix.
+
+This test is stronger than an in-process simulator because file descriptors, buffers and process memory really disappear. It is still **not a power-loss test**: killing one process does not remove the operating-system page cache or emulate storage-controller behavior. In particular, an unsynchronized rename may remain visible after process death even though a real power interruption is allowed to lose it. The test therefore accepts either old or new complete state at the pre-root-sync publication boundary, exactly as the architecture requires.
+
+Current CI covers the deterministic recovery codec, corruption rejection, complete scalar snapshot filesystem round-trip and the subprocess-kill matrix on Linux.
 
 ## 9. Next implementation work
 
 Before freezing any `.apc` physical encoding, the next storage work should establish:
 
-1. deterministic encoding for the complete recovery object, explicitly marked pre-format while unstable;
-2. fault injection around concrete filesystem write, flush, publication and reopen boundaries;
-3. subprocess/process-kill tests on desktop;
-4. orphan-candidate reclamation that cannot affect committed semantics;
-5. Android filesystem tests through ADB once the first native binding/test harness exists;
-6. verification that successful acknowledgement survives actual process death and device restart conditions supported by the test environment.
+1. concrete filesystem fault injection around write, candidate sync, manifest write, rename and directory sync errors;
+2. repeated local subprocess-kill stress campaigns rather than one CI case per boundary;
+3. orphan-candidate discovery and reclamation that cannot alter the committed root;
+4. a production-oriented authenticated storage envelope after the cryptographic construction is selected;
+5. Android filesystem/process-death tests through ADB once the first native binding/test harness exists;
+6. power-loss/reboot testing in environments where the storage boundary can actually be interrupted, rather than inferred from process death alone.
 
-The physical backend may change after these tests. The acknowledgement contract may not.
+The physical backend and development recovery encoding may change after these tests. The acknowledgement contract may not.
