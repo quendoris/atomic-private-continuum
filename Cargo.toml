@@ -5,4 +5,5 @@ members = [
     "crates/apc-crypto",
     "crates/apc-storage-fs",
     "crates/apc-sync",
+    "crates/apc-transport-github",
 ]
