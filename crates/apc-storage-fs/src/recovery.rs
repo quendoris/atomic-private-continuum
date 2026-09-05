@@ -60,10 +60,7 @@ pub(crate) fn decode(encoded: &[u8]) -> Result<Vec<u8>, RecoveryDecodeError> {
     }
 
     let version_offset = MAGIC.len();
-    let version = u16::from_be_bytes([
-        encoded[version_offset],
-        encoded[version_offset + 1],
-    ]);
+    let version = u16::from_be_bytes([encoded[version_offset], encoded[version_offset + 1]]);
     if version != VERSION {
         return Err(RecoveryDecodeError::UnsupportedVersion { version });
     }
@@ -74,8 +71,8 @@ pub(crate) fn decode(encoded: &[u8]) -> Result<Vec<u8>, RecoveryDecodeError> {
             .try_into()
             .expect("fixed length slice"),
     );
-    let payload_len = usize::try_from(payload_len_u64)
-        .map_err(|_| RecoveryDecodeError::LengthOverflow)?;
+    let payload_len =
+        usize::try_from(payload_len_u64).map_err(|_| RecoveryDecodeError::LengthOverflow)?;
     let expected_len = HEADER_LEN
         .checked_add(payload_len)
         .and_then(|value| value.checked_add(CHECKSUM_LEN))
