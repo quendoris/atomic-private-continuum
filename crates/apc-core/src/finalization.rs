@@ -122,7 +122,10 @@ impl<T: Clone + Eq> FinalizationLedger<T> {
         }
 
         self.finalized.insert(revision_id, statement);
-        Ok(self.finalized.get(&revision_id).expect("inserted statement must exist"))
+        Ok(self
+            .finalized
+            .get(&revision_id)
+            .expect("inserted statement must exist"))
     }
 
     /// Validates that no already-finalized local statement has been removed or
@@ -221,24 +224,15 @@ impl<T: Clone + Eq> FinalizationLedger<T> {
         };
 
         if !ledger.exposed_local_ids.is_subset(&ledger.local_revision_ids)
-            || !ledger.handed_off_local_ids.is_subset(&ledger.exposed_local_ids)
-            || !ledger.finalized.keys().all(|id| ledger.local_revision_ids.contains(id))
-        {
-            let revision_id = ledger
+            || !ledger
                 .handed_off_local_ids
-                .iter()
-                .chain(ledger.exposed_local_ids.iter())
-                .chain(ledger.finalized.keys())
-                .copied()
-                .find(|id| !ledger.local_revision_ids.contains(id))
-                .unwrap_or_else(|| {
-                    *ledger
-                        .local_revision_ids
-                        .iter()
-                        .next()
-                        .expect("invalid non-empty bookkeeping must identify a revision")
-                });
-            return Err(CoreError::UnknownLocalRevision { revision_id });
+                .is_subset(&ledger.exposed_local_ids)
+            || !ledger
+                .finalized
+                .keys()
+                .all(|id| ledger.local_revision_ids.contains(id))
+        {
+            return Err(CoreError::InvalidFinalizationSnapshot);
         }
 
         for revision_id in &ledger.local_revision_ids {
@@ -310,7 +304,10 @@ mod tests {
         ledger.finalize(&causal, rid(200)).unwrap();
         ledger.handoff(&causal, [rid(300)]).unwrap();
 
-        assert_eq!(ledger.exposed_local_ids(), &BTreeSet::from([rid(200), rid(300)]));
+        assert_eq!(
+            ledger.exposed_local_ids(),
+            &BTreeSet::from([rid(200), rid(300)])
+        );
         assert_eq!(ledger.handed_off_local_ids(), &BTreeSet::from([rid(300)]));
     }
 
@@ -365,6 +362,9 @@ mod tests {
         let restored = FinalizationLedger::restore(ledger.snapshot(), &causal).unwrap();
 
         assert_eq!(restored, ledger);
-        assert_eq!(restored.exposed_local_ids(), &BTreeSet::from([rid(200), rid(300)]));
+        assert_eq!(
+            restored.exposed_local_ids(),
+            &BTreeSet::from([rid(200), rid(300)])
+        );
     }
 }
