@@ -22,12 +22,16 @@ class DomainKey:
 
 @dataclass
 class SyncProjection:
-    projection_id: str
+    """Clear mergeable domain state with no publication-order identity.
+
+    Publication IDs belong to transport/envelope bookkeeping. They must not be
+    merged, compared or otherwise interpreted as logical state.
+    """
+
     domains: Dict[DomainKey, ScalarRegister] = field(default_factory=dict)
 
     def copy(self) -> "SyncProjection":
         return SyncProjection(
-            projection_id=self.projection_id,
             domains={key: value.copy() for key, value in self.domains.items()},
         )
 
@@ -38,10 +42,7 @@ class SyncProjection:
                 merged[key] = self.domains[key].merge(other.domains[key])
             else:
                 merged[key] = (self.domains.get(key) or other.domains[key]).copy()
-        return SyncProjection(
-            projection_id=max(self.projection_id, other.projection_id),
-            domains=merged,
-        )
+        return SyncProjection(domains=merged)
 
 
 @dataclass
@@ -67,11 +68,10 @@ class ReplicaSyncState:
                 incoming.copy() if current is None else current.merge(incoming)
             )
 
-    def export_dirty(self, *, projection_id: str) -> Optional[SyncProjection]:
+    def export_dirty(self) -> Optional[SyncProjection]:
         if not self.dirty:
             return None
         return SyncProjection(
-            projection_id=projection_id,
             domains={key: self.domains[key].copy() for key in self.dirty},
         )
 
@@ -117,6 +117,12 @@ class AdaptivePublicationGate:
 
 @dataclass(frozen=True)
 class ClearSyncPart:
+    """One clear multipart fragment before protection.
+
+    `publication_id` is envelope/assembly bookkeeping only. It has no merge,
+    causality or ordering meaning.
+    """
+
     publication_id: str
     part_index: int
     total_parts: int
@@ -154,7 +160,6 @@ def partition_projection(
     parts = []
     for index, group in enumerate(groups):
         fragment = SyncProjection(
-            projection_id=projection.projection_id,
             domains={key: projection.domains[key].copy() for key in group},
         )
         parts.append(
