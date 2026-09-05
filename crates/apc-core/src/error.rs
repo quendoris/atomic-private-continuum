@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::RevisionId;
+use crate::{AtomId, ContinuumId, RevisionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
@@ -13,6 +13,13 @@ pub enum CoreError {
     },
     CausalCycle {
         revision_id: RevisionId,
+    },
+    DuplicateAtomId {
+        atom_id: AtomId,
+    },
+    ContinuumMismatch {
+        left: ContinuumId,
+        right: ContinuumId,
     },
 }
 
@@ -32,6 +39,13 @@ impl fmt::Display for CoreError {
             Self::CausalCycle { revision_id } => {
                 write!(f, "causal graph contains a cycle at {revision_id:?}")
             }
+            Self::DuplicateAtomId { atom_id } => {
+                write!(f, "atom identity {atom_id:?} already exists in this state")
+            }
+            Self::ContinuumMismatch { left, right } => write!(
+                f,
+                "cannot merge different continua: left {left:?}, right {right:?}"
+            ),
         }
     }
 }
