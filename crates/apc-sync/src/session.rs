@@ -39,6 +39,9 @@ pub enum SessionIoError<TransportError, CursorError> {
     Cursor(CursorError),
 }
 
+pub type SessionIoResult<T, TransportError, CursorError> =
+    Result<T, SessionIoError<TransportError, CursorError>>;
+
 #[derive(Debug)]
 pub enum SessionCommitError<StoreError, CursorError> {
     Recovery(SyncRecoveryError),
@@ -86,7 +89,7 @@ pub fn publish_staged<T, C>(
     publication_id: PublicationId,
     transport: &mut T,
     codec: &C,
-) -> Result<PublishOutcome<T::Revision>, SessionIoError<T::Error, C::Error>>
+) -> SessionIoResult<PublishOutcome<T::Revision>, T::Error, C::Error>
 where
     T: OpaqueTransport,
     C: TransportCursorCodec<T::Revision>,
@@ -116,7 +119,7 @@ pub fn fetch_from_durable_cursor<T, C>(
     record: &DurableSyncRecord,
     transport: &mut T,
     codec: &C,
-) -> Result<FetchOutcome<T::Revision>, SessionIoError<T::Error, C::Error>>
+) -> SessionIoResult<FetchOutcome<T::Revision>, T::Error, C::Error>
 where
     T: OpaqueTransport,
     C: TransportCursorCodec<T::Revision>,
