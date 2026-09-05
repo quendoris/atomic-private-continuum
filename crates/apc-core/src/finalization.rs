@@ -104,7 +104,7 @@ impl<T: Clone + Eq> FinalizationLedger<T> {
         &mut self,
         causal: &ScalarRegister<T>,
         revision_id: RevisionId,
-    ) -> Result<&FinalizedStatement<T>, CoreError> {
+    ) -> Result<FinalizedStatement<T>, CoreError> {
         if !self.local_revision_ids.contains(&revision_id) {
             return Err(CoreError::UnknownLocalRevision { revision_id });
         }
@@ -118,14 +118,11 @@ impl<T: Clone + Eq> FinalizationLedger<T> {
             if existing != &statement {
                 return Err(CoreError::FinalizedStatementConflict { revision_id });
             }
-            return Ok(existing);
+            return Ok(existing.clone());
         }
 
-        self.finalized.insert(revision_id, statement);
-        Ok(self
-            .finalized
-            .get(&revision_id)
-            .expect("inserted statement must exist"))
+        self.finalized.insert(revision_id, statement.clone());
+        Ok(statement)
     }
 
     /// Validates that no already-finalized local statement has been removed or
@@ -278,8 +275,8 @@ mod tests {
         let mut ledger = FinalizationLedger::new();
         ledger.register_local(&causal, rid(300)).unwrap();
 
-        let first = ledger.finalize(&causal, rid(300)).unwrap().clone();
-        let second = ledger.finalize(&causal, rid(300)).unwrap().clone();
+        let first = ledger.finalize(&causal, rid(300)).unwrap();
+        let second = ledger.finalize(&causal, rid(300)).unwrap();
 
         assert_eq!(first, second);
         assert_eq!(first.revision_id, rid(300));
