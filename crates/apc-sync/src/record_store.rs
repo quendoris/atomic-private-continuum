@@ -109,7 +109,8 @@ where
 
         let clear = unprotect(&self.key, &self.protection_context(), &protected)
             .map_err(ProtectedSyncStoreError::Protection)?;
-        let record = decode_durable_sync_record(&clear).map_err(ProtectedSyncStoreError::Recovery)?;
+        let record =
+            decode_durable_sync_record(&clear).map_err(ProtectedSyncStoreError::Recovery)?;
         Ok(Some(record))
     }
 }
@@ -121,7 +122,8 @@ where
     type Error = ProtectedSyncStoreError<B::Error>;
 
     fn persist(&mut self, record: &DurableSyncRecord) -> Result<(), Self::Error> {
-        let clear = encode_durable_sync_record(record).map_err(ProtectedSyncStoreError::Recovery)?;
+        let clear =
+            encode_durable_sync_record(record).map_err(ProtectedSyncStoreError::Recovery)?;
         let protected = protect(&self.key, &self.protection_context(), &clear)
             .map_err(ProtectedSyncStoreError::Protection)?;
         commit_durable(&mut self.backend, &protected).map_err(ProtectedSyncStoreError::Backend)
@@ -151,13 +153,12 @@ mod tests {
         type Error = Infallible;
 
         fn load_committed(&self) -> Result<Option<Vec<u8>>, Self::Error> {
-            Ok(self.root.and_then(|root| self.candidates.get(&root).cloned()))
+            Ok(self
+                .root
+                .and_then(|root| self.candidates.get(&root).cloned()))
         }
 
-        fn write_candidate(
-            &mut self,
-            state: &Vec<u8>,
-        ) -> Result<Self::Candidate, Self::Error> {
+        fn write_candidate(&mut self, state: &Vec<u8>) -> Result<Self::Candidate, Self::Error> {
             let candidate = Handle(self.next);
             self.next += 1;
             self.candidates.insert(candidate, state.clone());
@@ -191,12 +192,9 @@ mod tests {
     #[test]
     fn protected_store_round_trips_complete_state_cursor_and_outbox() {
         let key = ContentKey::from_bytes([0x51; 32]);
-        let mut store = ProtectedSyncRecordStore::new(
-            MemoryBackend::default(),
-            key,
-            b"continuum-a".to_vec(),
-        )
-        .unwrap();
+        let mut store =
+            ProtectedSyncRecordStore::new(MemoryBackend::default(), key, b"continuum-a".to_vec())
+                .unwrap();
 
         let mut record = DurableSyncRecord::new(b"trusted".to_vec(), Some(cursor("R0")));
         record
@@ -215,12 +213,9 @@ mod tests {
     #[test]
     fn wrong_context_cannot_open_committed_sync_record() {
         let key = ContentKey::from_bytes([0x52; 32]);
-        let mut store = ProtectedSyncRecordStore::new(
-            MemoryBackend::default(),
-            key,
-            b"continuum-a".to_vec(),
-        )
-        .unwrap();
+        let mut store =
+            ProtectedSyncRecordStore::new(MemoryBackend::default(), key, b"continuum-a".to_vec())
+                .unwrap();
         let record = DurableSyncRecord::new(b"trusted".to_vec(), Some(cursor("R0")));
         store.persist(&record).unwrap();
 
@@ -242,12 +237,9 @@ mod tests {
     #[test]
     fn committed_backend_bytes_do_not_contain_trusted_plaintext() {
         let key = ContentKey::from_bytes([0x53; 32]);
-        let mut store = ProtectedSyncRecordStore::new(
-            MemoryBackend::default(),
-            key,
-            b"continuum-a".to_vec(),
-        )
-        .unwrap();
+        let mut store =
+            ProtectedSyncRecordStore::new(MemoryBackend::default(), key, b"continuum-a".to_vec())
+                .unwrap();
         let secret = b"trusted-sync-secret";
         let record = DurableSyncRecord::new(secret.to_vec(), Some(cursor("R0")));
         store.persist(&record).unwrap();
