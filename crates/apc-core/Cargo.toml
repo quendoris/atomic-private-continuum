@@ -1,0 +1,9 @@
+[package]
+name = "apc-core"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Portable core primitives for Atomic Private Continuum"
+publish = false
+
+[dependencies]
