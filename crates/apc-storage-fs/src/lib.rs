@@ -11,6 +11,7 @@
 compile_error!("apc-storage-fs currently implements the development Unix backend only");
 
 mod recovery;
+mod snapshot_codec;
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -18,6 +19,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use apc_core::DurabilityBackend;
+
+pub use snapshot_codec::{
+    decode_local_scalar_snapshot, encode_local_scalar_snapshot, SnapshotCodecError,
+};
 
 const OBJECTS_DIR: &str = "objects";
 const ROOT_FILE: &str = "root";
@@ -250,7 +255,7 @@ fn scan_next_candidate(objects_dir: &Path) -> Result<u64, FsStorageError> {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use apc_core::commit_durable;
+    use apc_core::{commit_durable, LocalScalarDomain, RevisionId, ScalarRegister, WorkingEpochId};
 
     use super::*;
 
@@ -279,6 +284,20 @@ mod tests {
         }
     }
 
+    fn id_bytes(value: u64) -> [u8; 32] {
+        let mut bytes = [0_u8; 32];
+        bytes[24..].copy_from_slice(&value.to_be_bytes());
+        bytes
+    }
+
+    fn rid(value: u64) -> RevisionId {
+        RevisionId::from_bytes(id_bytes(value))
+    }
+
+    fn wid(value: u64) -> WorkingEpochId {
+        WorkingEpochId::from_bytes(id_bytes(value))
+    }
+
     #[test]
     fn successful_commit_reopens_as_new_state() {
         let directory = TestDir::new();
@@ -289,6 +308,33 @@ mod tests {
 
         let reopened = UnixFsDurabilityBackend::open(directory.path()).unwrap();
         assert_eq!(reopened.load_committed().unwrap(), Some(b"first".to_vec()));
+    }
+
+    #[test]
+    fn complete_local_scalar_snapshot_survives_filesystem_round_trip() {
+        let directory = TestDir::new();
+        let mut causal = ScalarRegister::new();
+        causal.assign(rid(100), b"base".to_vec()).unwrap();
+        let mut domain = LocalScalarDomain::from_causal(causal).unwrap();
+        domain.begin_epoch(wid(1), b"first".to_vec()).unwrap();
+        domain.seal_local(rid(200)).unwrap();
+        domain.finalize(rid(200)).unwrap();
+        domain.handoff([rid(200)]).unwrap();
+        domain.begin_epoch(wid(2), b"draft".to_vec()).unwrap();
+        domain.update_pending(b"draft-latest".to_vec()).unwrap();
+
+        let snapshot = domain.snapshot();
+        let encoded = encode_local_scalar_snapshot(&snapshot).unwrap();
+        let mut backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+        commit_durable(&mut backend, &encoded).unwrap();
+        drop(backend);
+
+        let reopened = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+        let recovered_bytes = reopened.load_committed().unwrap().unwrap();
+        let recovered_snapshot = decode_local_scalar_snapshot(&recovered_bytes).unwrap();
+        let restored = LocalScalarDomain::restore(recovered_snapshot).unwrap();
+
+        assert_eq!(restored, domain);
     }
 
     #[test]
