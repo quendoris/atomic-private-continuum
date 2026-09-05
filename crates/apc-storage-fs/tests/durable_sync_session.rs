@@ -136,9 +136,7 @@ fn pid(value: u64) -> PublicationId {
     PublicationId::from_bytes(bytes)
 }
 
-fn open_store(
-    path: &Path,
-) -> ProtectedSyncRecordStore<UnixFsDurabilityBackend> {
+fn open_store(path: &Path) -> ProtectedSyncRecordStore<UnixFsDurabilityBackend> {
     let backend = UnixFsDurabilityBackend::open(path).unwrap();
     ProtectedSyncRecordStore::new(
         backend,
