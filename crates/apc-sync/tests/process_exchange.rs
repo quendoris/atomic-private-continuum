@@ -59,7 +59,10 @@ fn run_worker(args: &[&Path], mode: &str) {
         command.arg(arg);
     }
     let status = command.status().unwrap();
-    assert!(status.success(), "sync process worker {mode} failed: {status}");
+    assert!(
+        status.success(),
+        "sync process worker {mode} failed: {status}"
+    );
 }
 
 #[test]
@@ -82,10 +85,7 @@ fn independent_processes_exchange_authenticated_state_and_converge() {
         .windows(b"right".len())
         .any(|window| window == b"right"));
 
-    run_worker(
-        &[&left_result, &left_payload, &right_payload],
-        "merge-left",
-    );
+    run_worker(&[&left_result, &left_payload, &right_payload], "merge-left");
     run_worker(
         &[&right_result, &left_payload, &right_payload],
         "merge-right",
