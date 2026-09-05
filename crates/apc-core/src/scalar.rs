@@ -369,12 +369,9 @@ mod tests {
         let left =
             ScalarRegister::from_revisions([ScalarRevision::new(rid(1), "left", BTreeSet::new())])
                 .unwrap();
-        let right = ScalarRegister::from_revisions([ScalarRevision::new(
-            rid(1),
-            "right",
-            BTreeSet::new(),
-        )])
-        .unwrap();
+        let right =
+            ScalarRegister::from_revisions([ScalarRevision::new(rid(1), "right", BTreeSet::new())])
+                .unwrap();
 
         assert_eq!(
             left.merge(&right).unwrap_err(),
