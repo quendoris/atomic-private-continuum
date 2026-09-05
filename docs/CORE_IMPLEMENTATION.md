@@ -22,11 +22,12 @@ The core forbids Rust `unsafe` code by default. A future exception would require
 
 ## 2. Repository roles
 
-The repository now contains two deliberately different executable layers:
+The repository now contains deliberately different executable layers:
 
 ```text
 reference_model/          Python research/oracle models
-crates/apc-core/          real portable core implementation
+crates/apc-core/          portable semantic core
+crates/apc-storage-fs/    development Unix durability backend
 ```
 
 The Python reference model remains valuable after Rust implementation begins. It is used to:
@@ -39,6 +40,8 @@ The Python reference model remains valuable after Rust implementation begins. It
 The Rust core must not copy every research object merely because it exists in `reference_model/`.
 
 A research candidate enters `apc-core` only when its boundary is sufficiently understood to implement without freezing unresolved neighboring semantics.
+
+Concrete storage and transport adapters remain outside portable merge semantics even when they are implemented in Rust and live in the same workspace.
 
 ## 3. Implemented core slices
 
@@ -148,7 +151,7 @@ This is still one scalar merge-domain implementation, not a general final atom t
 
 ### 3.7 Durability acknowledgement protocol
 
-`DurabilityBackend<S>` and `commit_durable()` now define the backend-independent local commit ordering:
+`DurabilityBackend<S>` and `commit_durable()` define the backend-independent local commit ordering:
 
 ```text
 write complete candidate
@@ -162,11 +165,19 @@ sync committed root
 ACK success
 ```
 
-The abstraction deliberately does not choose a filesystem layout, database, journal or `.apc` physical encoding.
-
 Crash-injection tests verify the contract around every boundary: before publication only the old root must remain visible; after unsynchronized publication either old or new complete state may survive; after the committed-root barrier the new state must survive; after `commit_durable()` returns success the old state must not reappear.
 
-The detailed contract is recorded in `DURABILITY.md`.
+### 3.8 Development filesystem backend
+
+`apc-storage-fs` is the first concrete implementation of the durability contract. It is intentionally a development Unix backend, not the native `.apc` format.
+
+It persists opaque byte snapshots as immutable candidates and publishes one candidate through a small root manifest. Candidate file and directory entries are synchronized before publication; the replacement root manifest is synchronized before rename; the containing directory is synchronized before commit acknowledgement.
+
+The backend is single-writer for now and deliberately keeps local candidate numbering outside logical semantics.
+
+The current tests verify commit/reopen, durable-but-unpublished candidate isolation, later-root replacement without rewriting prior candidates, fail-closed root-manifest validation and restart-safe local candidate allocation.
+
+The detailed durability contract and physical-development status are recorded in `DURABILITY.md`.
 
 ## 4. Important non-commitments
 
@@ -180,7 +191,7 @@ The following are deliberately not implemented as frozen production semantics ye
 - general strong multi-domain atomic mutation;
 - final causal-membership/checkpoint encoding;
 - native `.apc` binary layout;
-- local crash-safe physical storage layout;
+- production local crash-safe physical storage layout;
 - concrete AEAD, nonce strategy or key hierarchy;
 - concrete per-replica signing/key-evolution primitive;
 - transport adapter API details;
@@ -224,7 +235,8 @@ The current implementation rejects:
 - finalization of a revision not registered as local;
 - mutation of an already-finalized statement;
 - transport handoff that depends on an unfinalized local causal identity;
-- inconsistent finalization crash snapshots.
+- inconsistent finalization crash snapshots;
+- invalid development filesystem root manifests.
 
 A future baseline-aware capsule importer may legitimately accept a revision whose parent body is absent when that dependency is covered by an authenticated retained baseline/checkpoint. That behavior belongs to a different import boundary and must be explicit. The ordinary complete-state register must not silently guess that a missing parent is safe.
 
@@ -239,7 +251,7 @@ Every merge primitive promoted into the real core must have tests for the algebr
 
 It must also test domain-specific invariants and adversarial invalid state.
 
-The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, and the durability acknowledgement crash matrix.
+The current Rust suite covers scalar causality, continuum/atom state composition, working-epoch coalescing and observation boundaries, finalization immutability, causal-ancestor handoff requirements, restoration of combined working/finalization snapshots, the abstract durability crash matrix and real Unix filesystem reopen behavior.
 
 Reference-model differential/property testing should be added as soon as the Rust representation is broad enough to exchange deterministic test fixtures with the Python oracle.
 
@@ -261,7 +273,7 @@ The next core work should proceed in this order unless new experiments invalidat
 2. **Core state shell** — implemented for `ContinuumState` / `AtomMap`.
 3. **Working-state boundary** — implemented for scalar domains.
 4. **Finalization boundary** — implemented for scalar domains, without selecting cryptography.
-5. **Durability protocol abstraction** — implemented; concrete local filesystem backend and process-kill testing are next, while physical `.apc` encoding remains unfrozen.
+5. **Durability protocol + development filesystem backend** — implemented; pre-format recovery encoding, concrete fault injection and process-kill testing are next.
 6. **Cryptographic protection** — select studied primitives and implement real authenticated protection; no fake security API should escape as production behavior.
 7. **Sync projection layer** — dirty-domain partial state, protected capsule boundary and baseline/dependency handling.
 8. **First transport adapter** — GitHub optimistic publication/retry above the generic protected sync interface.
