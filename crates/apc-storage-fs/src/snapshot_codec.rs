@@ -214,10 +214,7 @@ fn read_finalized(
     Ok(finalized)
 }
 
-fn write_id_set(
-    out: &mut Vec<u8>,
-    ids: &BTreeSet<RevisionId>,
-) -> Result<(), SnapshotCodecError> {
+fn write_id_set(out: &mut Vec<u8>, ids: &BTreeSet<RevisionId>) -> Result<(), SnapshotCodecError> {
     write_len(out, ids.len())?;
     for id in ids {
         write_revision_id(out, *id);
