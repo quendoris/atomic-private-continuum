@@ -91,7 +91,8 @@ impl<T: Clone + Eq> LocalScalarDomain<T> {
         &mut self,
         revision_id: RevisionId,
     ) -> Result<FinalizedStatement<T>, CoreError> {
-        self.finalization.finalize(self.working.causal(), revision_id)
+        self.finalization
+            .finalize(self.working.causal(), revision_id)
     }
 
     pub fn handoff<I>(&mut self, revision_ids: I) -> Result<(), CoreError>
@@ -111,8 +112,7 @@ impl<T: Clone + Eq> LocalScalarDomain<T> {
 
     pub fn restore(snapshot: LocalScalarSnapshot<T>) -> Result<Self, CoreError> {
         let working = WorkingScalar::restore(snapshot.working)?;
-        let finalization =
-            FinalizationLedger::restore(snapshot.finalization, working.causal())?;
+        let finalization = FinalizationLedger::restore(snapshot.finalization, working.causal())?;
 
         Ok(Self {
             working,
