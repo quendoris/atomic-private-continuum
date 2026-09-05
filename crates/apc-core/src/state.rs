@@ -121,8 +121,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{ScalarRegister, ScalarRevision, RevisionId};
     use crate::id::LOGICAL_ID_BYTES;
+    use crate::{RevisionId, ScalarRegister, ScalarRevision};
 
     fn id_bytes(value: u64) -> [u8; LOGICAL_ID_BYTES] {
         let mut bytes = [0_u8; LOGICAL_ID_BYTES];
@@ -143,26 +143,33 @@ mod tests {
     }
 
     fn scalar(id: u64, value: &'static str) -> ScalarRegister<&'static str> {
-        ScalarRegister::from_revisions([ScalarRevision::new(
-            rid(id),
-            value,
-            BTreeSet::new(),
-        )])
-        .unwrap()
+        ScalarRegister::from_revisions([ScalarRevision::new(rid(id), value, BTreeSet::new())])
+            .unwrap()
     }
 
     #[test]
     fn merging_distinct_atoms_preserves_both() {
         let mut left = ContinuumState::new(cid(1));
-        left.atoms_mut().insert_new(aid(10), scalar(10, "left")).unwrap();
+        left.atoms_mut()
+            .insert_new(aid(10), scalar(10, "left"))
+            .unwrap();
 
         let mut right = ContinuumState::new(cid(1));
-        right.atoms_mut().insert_new(aid(20), scalar(20, "right")).unwrap();
+        right
+            .atoms_mut()
+            .insert_new(aid(20), scalar(20, "right"))
+            .unwrap();
 
         let merged = left.merge_state(&right).unwrap();
         assert_eq!(merged.atoms().len(), 2);
-        assert_eq!(merged.atoms().get(aid(10)).unwrap().materialized(), Some(&"left"));
-        assert_eq!(merged.atoms().get(aid(20)).unwrap().materialized(), Some(&"right"));
+        assert_eq!(
+            merged.atoms().get(aid(10)).unwrap().materialized(),
+            Some(&"left")
+        );
+        assert_eq!(
+            merged.atoms().get(aid(20)).unwrap().materialized(),
+            Some(&"right")
+        );
     }
 
     #[test]
@@ -181,7 +188,10 @@ mod tests {
         right.atoms_mut().insert_new(aid(10), right_value).unwrap();
 
         let merged = left.merge_state(&right).unwrap();
-        assert_eq!(merged.atoms().get(aid(10)).unwrap().materialized(), Some(&"left"));
+        assert_eq!(
+            merged.atoms().get(aid(10)).unwrap().materialized(),
+            Some(&"left")
+        );
     }
 
     #[test]
@@ -201,10 +211,16 @@ mod tests {
     #[test]
     fn duplicate_local_atom_identity_is_rejected() {
         let mut state = ContinuumState::new(cid(1));
-        state.atoms_mut().insert_new(aid(10), scalar(1, "a")).unwrap();
+        state
+            .atoms_mut()
+            .insert_new(aid(10), scalar(1, "a"))
+            .unwrap();
 
         assert_eq!(
-            state.atoms_mut().insert_new(aid(10), scalar(2, "b")).unwrap_err(),
+            state
+                .atoms_mut()
+                .insert_new(aid(10), scalar(2, "b"))
+                .unwrap_err(),
             CoreError::DuplicateAtomId { atom_id: aid(10) }
         );
     }
