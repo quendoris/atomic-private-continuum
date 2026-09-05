@@ -9,6 +9,7 @@
 mod codec;
 mod projection;
 mod protected;
+mod record_store;
 mod recovery;
 mod session;
 mod transport;
@@ -23,6 +24,7 @@ pub use protected::{
     protect_scalar_part, unprotect_scalar_part, MultipartInbox, ProtectedSyncPart, PublicationId,
     SyncPartError,
 };
+pub use record_store::{ProtectedSyncRecordStore, ProtectedSyncStoreError};
 pub use recovery::{
     decode_durable_sync_record, encode_durable_sync_record, DurableOutboxEntry, DurableSyncRecord,
     SyncRecoveryError, TransportCursor,
