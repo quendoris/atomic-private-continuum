@@ -230,7 +230,7 @@ fn github_accept_then_local_restart_recovers_via_conflict_and_refetch() {
     assert_eq!(restarted.trusted_state(), b"local-exposed");
     assert_eq!(
         restarted.outbox().get(&pid(84)).unwrap().objects(),
-        &[wire.clone()]
+        std::slice::from_ref(&wire)
     );
     assert_eq!(
         codec.decode(restarted.applied_cursor().unwrap()).unwrap(),
