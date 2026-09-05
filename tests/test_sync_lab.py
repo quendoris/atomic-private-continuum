@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from reference_model.apc_model import ModelError
 from reference_model.sync_lab import (
     AdaptivePublicationGate,
-    ClearSyncPart,
     DomainKey,
     MemoryOpaqueTransport,
     MultipartInbox,
@@ -50,7 +50,7 @@ class DirtyProjectionTests(unittest.TestCase):
                 value=f"draft-{index}",
             )
 
-        projection = replica.export_dirty(projection_id=hid(9000))
+        projection = replica.export_dirty()
         self.assertIsNotNone(projection)
         assert projection is not None
         self.assertEqual(set(projection.domains), {key})
@@ -64,14 +64,14 @@ class DirtyProjectionTests(unittest.TestCase):
         replica = ReplicaSyncState()
         replica.assign(key=key, revision_id=hid(1), value="A")
 
-        projection = replica.export_dirty(projection_id=hid(10))
+        projection = replica.export_dirty()
         assert projection is not None
 
         replica.assign(key=key, revision_id=hid(2), value="B")
         replica.acknowledge(projection)
         self.assertIn(key, replica.dirty)
 
-        newest = replica.export_dirty(projection_id=hid(11))
+        newest = replica.export_dirty()
         assert newest is not None
         replica.acknowledge(newest)
         self.assertNotIn(key, replica.dirty)
@@ -83,7 +83,7 @@ class CapsuleMergeTests(unittest.TestCase):
 
         base = ReplicaSyncState()
         base.assign(key=key, revision_id=hid(1), value="base")
-        base_projection = base.export_dirty(projection_id=hid(100))
+        base_projection = base.export_dirty()
         assert base_projection is not None
 
         left = ReplicaSyncState()
@@ -94,8 +94,8 @@ class CapsuleMergeTests(unittest.TestCase):
 
         left.assign(key=key, revision_id=hid(10), value="left")
         right.assign(key=key, revision_id=hid(20), value="right")
-        left_projection = left.export_dirty(projection_id=hid(110))
-        right_projection = right.export_dirty(projection_id=hid(120))
+        left_projection = left.export_dirty()
+        right_projection = right.export_dirty()
         assert left_projection is not None and right_projection is not None
 
         receiver.import_projection(right_projection)
@@ -118,8 +118,8 @@ class CapsuleMergeTests(unittest.TestCase):
         left.assign(key=body, revision_id=hid(10), value="body")
         right.assign(key=title, revision_id=hid(20), value="title")
 
-        left_projection = left.export_dirty(projection_id=hid(30))
-        right_projection = right.export_dirty(projection_id=hid(40))
+        left_projection = left.export_dirty()
+        right_projection = right.export_dirty()
         assert left_projection is not None and right_projection is not None
 
         receiver = ReplicaSyncState()
@@ -128,6 +128,22 @@ class CapsuleMergeTests(unittest.TestCase):
 
         self.assertEqual(receiver.materialized(body), "body")
         self.assertEqual(receiver.materialized(title), "title")
+
+    def test_projection_merge_has_no_identifier_precedence(self) -> None:
+        left_key = DomainKey(hid(1), "body")
+        right_key = DomainKey(hid(2), "body")
+        left = ReplicaSyncState()
+        right = ReplicaSyncState()
+        left.assign(key=left_key, revision_id=hid(900), value="left")
+        right.assign(key=right_key, revision_id=hid(1), value="right")
+
+        left_projection = left.export_dirty()
+        right_projection = right.export_dirty()
+        assert left_projection is not None and right_projection is not None
+
+        merged = left_projection.merge(right_projection)
+        self.assertEqual(set(merged.domains), {left_key, right_key})
+        self.assertFalse(hasattr(merged, "projection_id"))
 
 
 class ProtectedMultipartTests(unittest.TestCase):
@@ -139,7 +155,7 @@ class ProtectedMultipartTests(unittest.TestCase):
                 revision_id=hid(1000 + index),
                 value=f"secret-{index}",
             )
-        projection = replica.export_dirty(projection_id=hid(5000))
+        projection = replica.export_dirty()
         assert projection is not None
         return projection
 
@@ -192,11 +208,28 @@ class ProtectedMultipartTests(unittest.TestCase):
         assert assembled is not None
         self.assertEqual(set(assembled.domains), set(projection.domains))
 
+    def test_publication_id_is_only_multipart_assembly_bookkeeping(self) -> None:
+        projection = self.make_projection(2)
+        first_parts = partition_projection(
+            projection,
+            publication_id=hid(10),
+            max_domains_per_part=1,
+        )
+        second_parts = partition_projection(
+            projection,
+            publication_id=hid(9999),
+            max_domains_per_part=1,
+        )
+
+        first_merged = first_parts[0].projection.merge(first_parts[1].projection)
+        second_merged = second_parts[0].projection.merge(second_parts[1].projection)
+        self.assertEqual(first_merged.domains, second_merged.domains)
+
     def test_unknown_protected_payload_is_rejected(self) -> None:
         from reference_model.sync_lab import ProtectedSyncPart
 
         inbox = MultipartInbox(TestOnlyOpaqueProtector())
-        with self.assertRaises(Exception):
+        with self.assertRaises(ModelError):
             inbox.ingest(ProtectedSyncPart(b"not-a-known-token"))
 
 
