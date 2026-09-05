@@ -81,7 +81,10 @@ impl fmt::Display for CoreError {
             }
             Self::NoWorkingEpoch => write!(f, "no working epoch is open"),
             Self::DirtyObservationRequiresSeal => {
-                write!(f, "dirty working state must be sealed before remote observation")
+                write!(
+                    f,
+                    "dirty working state must be sealed before remote observation"
+                )
             }
             Self::UnexpectedPreObservationRevision { revision_id } => write!(
                 f,
