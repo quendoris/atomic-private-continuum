@@ -7,6 +7,7 @@
 //! unresolved format, hierarchy, lifecycle, sequence and cryptographic choices
 //! behind future modules rather than freezing them accidentally.
 
+pub mod domain;
 pub mod error;
 pub mod finalization;
 pub mod id;
@@ -15,6 +16,7 @@ pub mod scalar;
 pub mod state;
 pub mod working;
 
+pub use domain::{LocalScalarDomain, LocalScalarSnapshot};
 pub use error::CoreError;
 pub use finalization::{FinalizationLedger, FinalizationSnapshot, FinalizedStatement};
 pub use id::{AtomId, ContinuumId, ReplicaId, RevisionId, WorkingEpochId};
