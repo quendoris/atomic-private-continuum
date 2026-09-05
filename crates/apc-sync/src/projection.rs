@@ -162,7 +162,11 @@ where
         let domains = self
             .dirty
             .iter()
-            .filter_map(|key| self.domains.get(key).map(|state| (key.clone(), state.clone())))
+            .filter_map(|key| {
+                self.domains
+                    .get(key)
+                    .map(|state| (key.clone(), state.clone()))
+            })
             .collect();
         Some(SyncProjection::from_domains(domains))
     }
@@ -221,7 +225,9 @@ mod tests {
 
     fn register(revision: u64, value: &str) -> ScalarRegister<Vec<u8>> {
         let mut register = ScalarRegister::new();
-        register.assign(rid(revision), value.as_bytes().to_vec()).unwrap();
+        register
+            .assign(rid(revision), value.as_bytes().to_vec())
+            .unwrap();
         register
     }
 
@@ -229,18 +235,17 @@ mod tests {
     fn independent_domains_merge_without_publication_identity() {
         let body = key(1, "body");
         let title = key(1, "title");
-        let left = SyncProjection::from_domains(BTreeMap::from([(
-            body.clone(),
-            register(10, "body"),
-        )]));
-        let right = SyncProjection::from_domains(BTreeMap::from([(
-            title.clone(),
-            register(20, "title"),
-        )]));
+        let left =
+            SyncProjection::from_domains(BTreeMap::from([(body.clone(), register(10, "body"))]));
+        let right =
+            SyncProjection::from_domains(BTreeMap::from([(title.clone(), register(20, "title"))]));
 
         let merged = left.merge(&right).unwrap();
         assert_eq!(merged.len(), 2);
-        assert_eq!(merged.get(&body).unwrap().materialized(), Some(&b"body".to_vec()));
+        assert_eq!(
+            merged.get(&body).unwrap().materialized(),
+            Some(&b"body".to_vec())
+        );
         assert_eq!(
             merged.get(&title).unwrap().materialized(),
             Some(&b"title".to_vec())
@@ -288,10 +293,8 @@ mod tests {
     #[test]
     fn clean_remote_import_does_not_become_a_local_publication() {
         let body = key(1, "body");
-        let projection = SyncProjection::from_domains(BTreeMap::from([(
-            body.clone(),
-            register(10, "remote"),
-        )]));
+        let projection =
+            SyncProjection::from_domains(BTreeMap::from([(body.clone(), register(10, "remote"))]));
         let mut state = ScalarDirtyDomainState::new();
         state.import_projection(&projection).unwrap();
 
