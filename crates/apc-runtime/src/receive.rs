@@ -178,9 +178,7 @@ pub fn decode_complete_scalar_domain_objects(
 
     let incomplete = inbox.pending_publications();
     if incomplete != 0 {
-        return Err(ScalarObjectDecodeError::IncompleteMultipartPublications {
-            count: incomplete,
-        });
+        return Err(ScalarObjectDecodeError::IncompleteMultipartPublications { count: incomplete });
     }
 
     Ok(completed)
@@ -369,8 +367,10 @@ mod tests {
         let second_projection =
             SyncProjection::from_domains(BTreeMap::from([(semantic_key, second)]));
 
-        let part0 = protect_scalar_part(key, cid(1), publication_id, 0, 2, &first_projection).unwrap();
-        let part1 = protect_scalar_part(key, cid(1), publication_id, 1, 2, &second_projection).unwrap();
+        let part0 =
+            protect_scalar_part(key, cid(1), publication_id, 0, 2, &first_projection).unwrap();
+        let part1 =
+            protect_scalar_part(key, cid(1), publication_id, 1, 2, &second_projection).unwrap();
 
         vec![
             encode_protected_sync_part(&part0).unwrap(),
@@ -427,13 +427,8 @@ mod tests {
         let semantic_key = domain_key();
         let wire = multipart_wire(&key, pid(8), rid(800), rid(801));
 
-        let error = decode_complete_scalar_domain_objects(
-            &key,
-            cid(1),
-            &semantic_key,
-            &wire[..1],
-        )
-        .unwrap_err();
+        let error = decode_complete_scalar_domain_objects(&key, cid(1), &semantic_key, &wire[..1])
+            .unwrap_err();
 
         assert!(matches!(
             error,
