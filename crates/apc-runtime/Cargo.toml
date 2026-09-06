@@ -10,3 +10,7 @@ publish = false
 apc-core = { path = "../apc-core" }
 apc-sync = { path = "../apc-sync" }
 apc-transport-github = { path = "../apc-transport-github" }
+
+[dev-dependencies]
+apc-crypto = { path = "../apc-crypto" }
+apc-storage-fs = { path = "../apc-storage-fs" }
