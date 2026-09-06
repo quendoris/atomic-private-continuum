@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use apc_core::{ContinuumId, CoreError, LocalScalarDomain, RevisionId, ScalarRegister};
+use apc_core::{ContinuumId, CoreError, RevisionId, ScalarRegister};
 use apc_crypto::ContentKey;
 use apc_sync::{
     encode_protected_sync_part, protect_scalar_part, stage_outbound, DomainKey, DurableSyncRecord,
@@ -258,7 +258,7 @@ fn dependency_closure<T: Clone + Eq>(
 #[cfg(test)]
 mod tests {
     use apc_core::id::LOGICAL_ID_BYTES;
-    use apc_core::{AtomId, WorkingEpochId};
+    use apc_core::{AtomId, LocalScalarDomain, WorkingEpochId};
     use apc_sync::{
         decode_protected_sync_part, unprotect_scalar_part, SyncRecordStore, TransportCursor,
     };
@@ -365,7 +365,7 @@ mod tests {
                 .unwrap()
                 .revisions()
                 .map(|r| r.id)
-                .collect(),
+                .collect::<BTreeSet<_>>(),
             BTreeSet::from([rid(100), rid(200)])
         );
         assert_eq!(
@@ -374,7 +374,7 @@ mod tests {
                 .unwrap()
                 .revisions()
                 .map(|r| r.id)
-                .collect(),
+                .collect::<BTreeSet<_>>(),
             BTreeSet::from([rid(300), rid(400)])
         );
     }
