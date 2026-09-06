@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use apc_core::{
     ContinuumId, CoreError, LocalScalarDomain, LocalScalarSnapshot, RevisionId, ScalarRevision,
 };
@@ -49,6 +51,10 @@ pub enum ScalarCatchUpOutcome<R> {
     Applied {
         head: R,
         object_count: usize,
+        /// Revision identities proven to have arrived in authenticated remote
+        /// scalar state during this catch-up pass. These are transport-observation
+        /// evidence, not a new causal ordering source.
+        observed_revision_ids: BTreeSet<RevisionId>,
         sealed_local: Option<ScalarRevision<Vec<u8>>>,
     },
     CursorAdvancedWithoutSemanticObjects {
@@ -86,6 +92,11 @@ pub type ScalarCatchUpResult<R, TransportError, TrustedError, StoreError, Cursor
 /// merged before a single semantic observation boundary is crossed. Dirty local
 /// work is therefore sealed once against the frontier it actually observed, not
 /// once per fetched transport object.
+///
+/// `Applied::observed_revision_ids` records only identities present in the
+/// authenticated remote register assembled during this pass. It deliberately
+/// does not infer transport observation from identities that were already present
+/// in local state, which is required for lost-ack reconciliation.
 ///
 /// The typed result intentionally preserves transport, trusted-state, durability
 /// and cursor failures as distinct error channels at this composition seam.
@@ -141,6 +152,7 @@ where
             }
 
             let remote = combined_remote.expect("non-empty object set produces remote state");
+            let observed_revision_ids = remote.revisions().map(|revision| revision.id).collect();
             let sealed_local = commit_received_scalar_domain(
                 domain,
                 record,
@@ -154,6 +166,7 @@ where
             Ok(ScalarCatchUpOutcome::Applied {
                 head,
                 object_count,
+                observed_revision_ids,
                 sealed_local,
             })
         }
@@ -162,8 +175,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use apc_core::id::LOGICAL_ID_BYTES;
     use apc_core::{AtomId, ScalarRegister, WorkingEpochId};
     use apc_sync::{
@@ -364,6 +375,7 @@ mod tests {
         let ScalarCatchUpOutcome::Applied {
             head,
             object_count,
+            observed_revision_ids,
             sealed_local,
         } = outcome
         else {
@@ -371,6 +383,7 @@ mod tests {
         };
         assert_eq!(head, Revision(2));
         assert_eq!(object_count, 1);
+        assert_eq!(observed_revision_ids, BTreeSet::from([rid(100), rid(900)]));
         assert_eq!(sealed_local.unwrap().parents, BTreeSet::from([rid(100)]));
         assert_eq!(
             domain.causal().frontier_ids(),
