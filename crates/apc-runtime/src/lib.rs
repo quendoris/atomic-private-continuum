@@ -7,6 +7,7 @@
 //! becoming portable format semantics.
 
 mod publication;
+mod trusted_state;
 
 use apc_sync::{TransportCursor, TransportCursorCodec};
 use apc_transport_github::GitHubCommitOid;
@@ -14,6 +15,10 @@ use apc_transport_github::GitHubCommitOid;
 pub use publication::{
     recover_scalar_domain, stage_scalar_handoff, ProtectedPublication, ScalarHandoffStageError,
     ScalarRecoveryError, TrustedStateCodec,
+};
+pub use trusted_state::{
+    decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
+    TrustedStateCodecError,
 };
 
 /// Reversible local crash-recovery codec for GitHub transport revisions.
