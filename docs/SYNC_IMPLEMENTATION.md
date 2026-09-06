@@ -1,6 +1,6 @@
 # A.P.C. sync implementation
 
-Status: **protected scalar sync, opaque transport seam, GitHub adapter, crash-consistent durable recovery, foreground transport gating, deterministic local scalar recovery encoding, typed outbound/inbound boundaries, durable-cursor catch-up, single- and multi-publication foreground resume, authenticated lost-ack reconciliation and bounded conflict follow-up are implemented; portable format, multipart runtime catch-up and production GitHub HTTP binding remain unfrozen**.
+Status: **protected scalar sync, opaque transport seam, GitHub adapter, crash-consistent durable recovery, foreground transport gating, deterministic local scalar recovery encoding, typed outbound/inbound boundaries, complete authenticated multipart durable-cursor catch-up, single- and multi-publication foreground resume, authenticated lost-ack reconciliation and bounded conflict follow-up are implemented; portable format and production GitHub HTTP binding remain unfrozen**.
 
 This document records the executable Rust synchronization boundary after the research model in `SYNC_EXPERIMENTS.md`. It does not replace `SYNC.md`, `SYNC_CAPSULES.md`, `GITHUB_TRANSPORT.md` or `DURABLE_SYNC.md`.
 
@@ -71,9 +71,24 @@ ciphertext
 
 `APCSPRT1` is the current development wire framing for protected parts.
 
-`MultipartInbox` authenticates and accumulates parts per `PublicationId`. It exposes no `ScalarSyncProjection` before all declared parts exist. Duplicate identical parts are harmless; conflicting authenticated state or inconsistent totals fail closed.
+`MultipartInbox` authenticates and accumulates parts per `PublicationId`. It exposes no `ScalarSyncProjection` before all declared parts exist. Duplicate identical parts while a publication is pending are harmless; conflicting authenticated state or inconsistent totals fail closed.
 
-The current runtime catch-up path still consumes complete single-part scalar objects. The next receive slice must place `MultipartInbox` above durable-cursor advancement so a fetched range containing an incomplete publication cannot be partially made visible and then skipped by committing a newer cursor.
+`apc-runtime::decode_complete_scalar_domain_objects()` now places that assembly boundary above one fetched transport range. It consumes every protected object in the range, authenticates and assembles every publication, and returns scalar state only if no publication remains incomplete after the entire range has been consumed.
+
+The consequence is deliberate:
+
+```text
+complete publication A
++
+incomplete publication B
+inside one fetched range
+        |
+        v
+no semantic visibility from either publication
+no durable cursor advance
+```
+
+The ephemeral inbox is discarded on failure. The old durable cursor remains authoritative so the same range can be refetched instead of persisting partial semantic visibility.
 
 ## 4. Opaque transport and GitHub
 
@@ -226,7 +241,9 @@ An unfinalized local dependency fails before protection. A durability failure le
 
 ## 8. Typed inbound authenticated-observation boundary
 
-`decode_single_scalar_domain_object()` decodes the protected wire part, verifies one-part shape, performs AEAD authentication/context verification and extracts exactly the expected scalar domain.
+`decode_single_scalar_domain_object()` remains the narrow inverse for a code path that explicitly requires one complete single-part publication.
+
+The durable range path uses `decode_complete_scalar_domain_objects()`, which wire-decodes, authenticates and completely assembles every multipart publication in the fetched range before returning any scalar register.
 
 `ReceivedScalarState` couples:
 
@@ -263,11 +280,34 @@ Network receipt therefore does not retroactively become a causal parent of local
 
 `catch_up_single_scalar_domain()` always fetches from the cursor paired with durable trusted state.
 
-For a changed range it authenticates the returned scalar objects, merges decoded remote registers, then crosses one semantic observation boundary. Dirty local work is sealed once against the frontier it actually observed, not once per transport object.
+For a changed range it now performs:
+
+```text
+fetch from durable cursor
+        |
+decode every protected object
+        |
+authenticate + assemble every publication
+        |
+any incomplete multipart publication?
+      /              \
+    yes              no
+     |                |
+fail before        merge all fully
+semantic mutation authenticated scalar state
+or cursor advance      |
+                    one semantic observation
+                        |
+                    one durability barrier
+```
+
+All complete scalar registers are merged before the single semantic observation boundary. A dirty local working epoch is therefore sealed once against the frontier it actually observed, not once per wire object, part, publication or transport completion order.
 
 A transport-head advance containing no A.P.C. semantic objects advances the durable cursor together with the unchanged trusted snapshot without manufacturing a local causal revision.
 
-For an authenticated semantic change, `ScalarCatchUpOutcome::Applied` also reports the exact `RevisionId`s present in the authenticated remote register assembled during that pass. Those IDs are transport-observation evidence for lost-ack reconciliation; they are not causal order and are not inferred from local state.
+For an authenticated semantic change, `ScalarCatchUpOutcome::Applied` reports the exact `RevisionId`s present in the fully assembled authenticated remote register. Those IDs are transport-observation evidence for lost-ack reconciliation; they are not causal order and are not inferred from local state.
+
+The `object_count` field counts protected transport wire objects consumed. A two-part logical publication therefore contributes two objects without being treated as two semantic publications.
 
 ## 10. Foreground resume: narrow path
 
@@ -393,7 +433,12 @@ The Rust suite covers, among other cases:
 - unresolved stale set blocking a current set without implicit ordering;
 - authenticated reconciliation of an entire stale lost-ACK set;
 - bounded batch conflict followed by exactly one catch-up/reclassification pass;
-- remote batch acceptance followed by failed local reconciliation and later authenticated set recovery with no second publish.
+- remote batch acceptance followed by failed local reconciliation and later authenticated set recovery with no second publish;
+- complete multipart publication assembly with reversed part order;
+- complete and incomplete publications sharing a fetched range without partial semantic visibility or cursor advancement;
+- two complete multipart publications interleaved independently of `PublicationId` byte order;
+- identical duplicate multipart part delivery while pending;
+- authenticated conflicting duplicate multipart part rejection.
 
 ## 16. Still intentionally unresolved
 
@@ -409,7 +454,7 @@ The executable path does **not** freeze or fully solve:
 - replica signatures and key evolution;
 - replay/rollback policy;
 - truly irreducible multi-domain atomic publication semantics;
-- multipart runtime catch-up above `MultipartInbox`;
+- persistence/reconstruction policy for multipart assembly if a future transport API cannot provide a complete durable-cursor range in one logical fetch;
 - automatic semantic re-export/rebase of unresolved stale publication sets across cursor generations;
 - durable preservation of authenticated lost-ack proof across an additional crash between catch-up commit and later outbox retirement;
 - production GitHub HTTP/GraphQL client and credentials;
@@ -421,9 +466,9 @@ The current scalar capsules may retain more causal material than the eventual co
 
 ## 17. Immediate next implementation work
 
-The next slices should move outward from the now-tested set-based scalar resume path:
+The next slices should move outward from the now-tested set-based and multipart scalar receive paths:
 
-1. wire complete authenticated multipart assembly into durable-cursor catch-up while refusing to advance the cursor past any incomplete publication;
+1. harden fetched-range replay/duplication assumptions and add repeated multipart/refetch adversarial coverage;
 2. add repeated multi-publication conflict/rebase-chain and fetch-failure adversarial tests;
 3. introduce the first complete local trusted-state container abstraction for several independent merge domains without accidental cross-domain transaction semantics;
 4. keep semantic stale-set re-export above transport/session code and require a fresh `PublicationId` for every replacement;
