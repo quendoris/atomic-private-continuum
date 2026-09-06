@@ -172,14 +172,8 @@ fn accepted_batch_with_failed_local_reconcile_is_rediscovered_and_retired_as_a_s
         [rid(200)],
     )
     .unwrap();
-    stage_prepared_scalar_handoff(
-        &mut domain,
-        &mut record,
-        &mut store,
-        &trusted_codec,
-        first,
-    )
-    .unwrap();
+    stage_prepared_scalar_handoff(&mut domain, &mut record, &mut store, &trusted_codec, first)
+        .unwrap();
 
     domain.begin_epoch(wid(2), b"second".to_vec()).unwrap();
     domain.seal_local(rid(300)).unwrap();
@@ -193,14 +187,8 @@ fn accepted_batch_with_failed_local_reconcile_is_rediscovered_and_retired_as_a_s
         [rid(300)],
     )
     .unwrap();
-    stage_prepared_scalar_handoff(
-        &mut domain,
-        &mut record,
-        &mut store,
-        &trusted_codec,
-        second,
-    )
-    .unwrap();
+    stage_prepared_scalar_handoff(&mut domain, &mut record, &mut store, &trusted_codec, second)
+        .unwrap();
 
     assert_eq!(record.outbox().len(), 2);
     assert_eq!(
@@ -253,10 +241,7 @@ fn accepted_batch_with_failed_local_reconcile_is_rediscovered_and_retired_as_a_s
     )
     .unwrap();
 
-    assert_eq!(
-        report.observed_reconciled,
-        BTreeSet::from([pid(1), pid(2)])
-    );
+    assert_eq!(report.observed_reconciled, BTreeSet::from([pid(1), pid(2)]));
     assert_eq!(report.action, ScalarBatchResumeAction::None);
     assert_eq!(transport.publish_calls, 1);
     assert_eq!(transport.fetch_calls, 2);
