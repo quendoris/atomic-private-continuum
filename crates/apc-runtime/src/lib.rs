@@ -38,9 +38,7 @@ pub use resume_batch::{
     resume_scalar_outbox_set, ScalarBatchResumeAction, ScalarBatchResumeError,
     ScalarBatchResumeReport, ScalarBatchResumeResult,
 };
-pub use resume_batch_cycle::{
-    resume_scalar_outbox_set_bounded, ScalarBatchResumeCycleReport,
-};
+pub use resume_batch_cycle::{resume_scalar_outbox_set_bounded, ScalarBatchResumeCycleReport};
 pub use resume_cycle::{resume_single_scalar_domain_bounded, ScalarResumeCycleReport};
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
