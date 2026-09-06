@@ -20,6 +20,7 @@ mod wire;
 
 pub use batch::{
     commit_reconciled_outbox_batch, publish_staged_batch, BatchCommitError, BatchPublishError,
+    BatchPublishResult,
 };
 pub use codec::{decode_scalar_projection, encode_scalar_projection, SyncCodecError};
 pub use foreground::{ForegroundSyncLifecycle, ForegroundTransport, ForegroundTransportError};
