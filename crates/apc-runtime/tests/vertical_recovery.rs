@@ -304,7 +304,9 @@ fn dirty_remote_observation_survives_real_crypto_filesystem_restart_with_true_co
     assert!(receiver.pending().is_none());
     assert!(record.outbox().is_empty());
     assert_eq!(
-        cursor_codec.decode(record.applied_cursor().unwrap()).unwrap(),
+        cursor_codec
+            .decode(record.applied_cursor().unwrap())
+            .unwrap(),
         new_head
     );
 
