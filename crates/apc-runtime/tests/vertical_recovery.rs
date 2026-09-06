@@ -129,14 +129,7 @@ fn semantic_exposure_survives_real_sync_crypto_filesystem_restart_and_exact_outb
     )
     .unwrap();
 
-    stage_prepared_scalar_handoff(
-        &mut domain,
-        &mut record,
-        &mut store,
-        &codec,
-        prepared,
-    )
-    .unwrap();
+    stage_prepared_scalar_handoff(&mut domain, &mut record, &mut store, &codec, prepared).unwrap();
 
     assert!(domain
         .finalization()
@@ -202,12 +195,8 @@ fn semantic_exposure_survives_real_sync_crypto_filesystem_restart_and_exact_outb
     );
 
     let part = decode_protected_sync_part(&recovered_outbox.objects()[0]).unwrap();
-    let projection = unprotect_scalar_part(
-        &ContentKey::from_bytes(PUBLICATION_KEY),
-        cid(1),
-        &part,
-    )
-    .unwrap();
+    let projection =
+        unprotect_scalar_part(&ContentKey::from_bytes(PUBLICATION_KEY), cid(1), &part).unwrap();
     let published = projection.get(&semantic_key).unwrap();
 
     assert!(published.revision(rid(100)).is_some());
