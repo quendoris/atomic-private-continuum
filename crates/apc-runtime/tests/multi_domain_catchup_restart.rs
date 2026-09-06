@@ -18,7 +18,7 @@ use apc_storage_fs::UnixFsDurabilityBackend;
 use apc_sync::{
     encode_protected_sync_part, protect_scalar_part, DomainKey, DurableSyncRecord, FetchOutcome,
     OpaqueTransport, ProtectedSyncRecordStore, PublicationId, PublishOutcome, SyncProjection,
-    SyncRecordStore, TransportCursor, TransportCursorCodec,
+    TransportCursor, TransportCursorCodec,
 };
 
 static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
