@@ -75,6 +75,49 @@ pub enum ScalarReceiveCommitError<TrustedError, StoreError, CursorError> {
     Sync(SessionCommitError<StoreError, CursorError>),
 }
 
+pub type ScalarReceiveResult<T, TrustedError, StoreError, CursorError> = Result<
+    Option<ScalarRevision<T>>,
+    ScalarReceiveCommitError<TrustedError, StoreError, CursorError>,
+>;
+
+/// Authenticated semantic state plus the exact observation/cursor boundary at
+/// which it will become visible to one local scalar domain.
+///
+/// Bundling these values keeps the receive coordinator API narrow and prevents
+/// callers from accidentally separating the remote state from the cursor that is
+/// durably paired with observing it.
+pub struct ReceivedScalarState<'a, T, R> {
+    remote: &'a ScalarRegister<T>,
+    pre_observation_revision_id: Option<RevisionId>,
+    new_head: &'a R,
+}
+
+impl<'a, T, R> ReceivedScalarState<'a, T, R> {
+    pub fn new(
+        remote: &'a ScalarRegister<T>,
+        pre_observation_revision_id: Option<RevisionId>,
+        new_head: &'a R,
+    ) -> Self {
+        Self {
+            remote,
+            pre_observation_revision_id,
+            new_head,
+        }
+    }
+
+    pub fn remote(&self) -> &ScalarRegister<T> {
+        self.remote
+    }
+
+    pub fn pre_observation_revision_id(&self) -> Option<RevisionId> {
+        self.pre_observation_revision_id
+    }
+
+    pub fn new_head(&self) -> &R {
+        self.new_head
+    }
+}
+
 /// Decode and authenticate one complete single-domain scalar sync object.
 ///
 /// This is the inverse of the current one-part `prepare_scalar_handoff()` path.
@@ -107,22 +150,20 @@ pub fn decode_single_scalar_domain_object(
 /// Make authenticated remote scalar state semantically observable and advance
 /// the durable transport cursor as one crash-safe runtime transition.
 ///
-/// If local work is dirty, `pre_observation_revision_id` seals it on a cloned
-/// candidate before the remote state is merged. The resulting local revision is
-/// therefore based on the frontier that the working epoch actually observed.
-/// The candidate trusted state and new cursor are then persisted together through
-/// `commit_received()`. Only after that durability barrier succeeds is the live
-/// semantic domain replaced.
+/// If local work is dirty, the receive bundle's pre-observation revision seals it
+/// on a cloned candidate before the remote state is merged. The resulting local
+/// revision is therefore based on the frontier that the working epoch actually
+/// observed. The candidate trusted state and new cursor are then persisted
+/// together through `commit_received()`. Only after that durability barrier
+/// succeeds is the live semantic domain replaced.
 pub fn commit_received_scalar_domain<T, S, TC, CC, R>(
     domain: &mut LocalScalarDomain<T>,
     record: &mut DurableSyncRecord,
     store: &mut S,
     trusted_codec: &TC,
     cursor_codec: &CC,
-    remote: &ScalarRegister<T>,
-    pre_observation_revision_id: Option<RevisionId>,
-    new_head: &R,
-) -> Result<Option<ScalarRevision<T>>, ScalarReceiveCommitError<TC::Error, S::Error, CC::Error>>
+    received: ReceivedScalarState<'_, T, R>,
+) -> ScalarReceiveResult<T, TC::Error, S::Error, CC::Error>
 where
     T: Clone + Eq,
     S: SyncRecordStore,
@@ -131,14 +172,20 @@ where
 {
     let mut candidate = domain.clone();
     let sealed = candidate
-        .observe_remote(remote, pre_observation_revision_id)
+        .observe_remote(received.remote, received.pre_observation_revision_id)
         .map_err(ScalarReceiveCommitError::Core)?;
     let merged_trusted_state = trusted_codec
         .encode(&candidate.snapshot())
         .map_err(ScalarReceiveCommitError::TrustedState)?;
 
-    commit_received(record, store, cursor_codec, merged_trusted_state, new_head)
-        .map_err(ScalarReceiveCommitError::Sync)?;
+    commit_received(
+        record,
+        store,
+        cursor_codec,
+        merged_trusted_state,
+        received.new_head,
+    )
+    .map_err(ScalarReceiveCommitError::Sync)?;
 
     *domain = candidate;
     Ok(sealed)
@@ -281,15 +328,14 @@ mod tests {
         let mut store = MemoryStore::default();
 
         let remote = sender().causal().clone();
+        let head = Revision(2);
         let sealed = commit_received_scalar_domain(
             &mut receiver,
             &mut record,
             &mut store,
             &trusted_codec,
             &cursor_codec,
-            &remote,
-            Some(rid(200)),
-            &Revision(2),
+            ReceivedScalarState::new(&remote, Some(rid(200)), &head),
         )
         .unwrap()
         .unwrap();
@@ -330,6 +376,8 @@ mod tests {
             fail: true,
             ..MemoryStore::default()
         };
+        let remote = sender().causal().clone();
+        let head = Revision(2);
 
         assert!(commit_received_scalar_domain(
             &mut receiver,
@@ -337,9 +385,7 @@ mod tests {
             &mut store,
             &trusted_codec,
             &cursor_codec,
-            &sender().causal().clone(),
-            Some(rid(200)),
-            &Revision(2),
+            ReceivedScalarState::new(&remote, Some(rid(200)), &head),
         )
         .is_err());
 
