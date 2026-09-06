@@ -13,8 +13,9 @@ use apc_sync::{TransportCursor, TransportCursorCodec};
 use apc_transport_github::GitHubCommitOid;
 
 pub use publication::{
-    recover_scalar_domain, stage_scalar_handoff, ProtectedPublication, ScalarHandoffStageError,
-    ScalarRecoveryError, TrustedStateCodec,
+    prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
+    PreparedScalarHandoff, ProtectedPublication, ScalarHandoffStageError,
+    ScalarPublicationPrepareError, ScalarRecoveryError, TrustedStateCodec,
 };
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
