@@ -90,7 +90,10 @@ fn interleaved_reversed_complete_publications_assemble_without_id_ordering() {
         .unwrap();
     let revision_ids: BTreeSet<_> = merged.revisions().map(|revision| revision.id).collect();
 
-    assert_eq!(revision_ids, BTreeSet::from([rid(10), rid(11), rid(20), rid(21)]));
+    assert_eq!(
+        revision_ids,
+        BTreeSet::from([rid(10), rid(11), rid(20), rid(21)])
+    );
     assert_eq!(
         merged.frontier_ids(),
         BTreeSet::from([rid(10), rid(11), rid(20), rid(21)])
@@ -114,10 +117,7 @@ fn identical_duplicate_part_while_pending_is_harmless() {
     .unwrap();
 
     assert_eq!(decoded.len(), 1);
-    let revision_ids: BTreeSet<_> = decoded[0]
-        .revisions()
-        .map(|revision| revision.id)
-        .collect();
+    let revision_ids: BTreeSet<_> = decoded[0].revisions().map(|revision| revision.id).collect();
     assert_eq!(revision_ids, BTreeSet::from([rid(30), rid(31)]));
 }
 
@@ -127,8 +127,7 @@ fn authenticated_conflicting_duplicate_part_fails_closed() {
     let expected_domain = domain_key();
 
     let first_version = encoded_part(&key, pid(9), 0, 2, rid(40), b"first-version");
-    let conflicting_version =
-        encoded_part(&key, pid(9), 0, 2, rid(41), b"conflicting-version");
+    let conflicting_version = encoded_part(&key, pid(9), 0, 2, rid(41), b"conflicting-version");
     let final_part = encoded_part(&key, pid(9), 1, 2, rid(42), b"final");
 
     let error = decode_complete_scalar_domain_objects(
