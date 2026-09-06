@@ -17,6 +17,7 @@ mod resume_batch;
 mod resume_batch_cycle;
 mod resume_cycle;
 mod resume_recovery_batch;
+mod resume_recovery_cycle;
 mod trusted_state;
 mod trusted_state_set;
 
@@ -62,6 +63,9 @@ pub use resume_recovery_batch::{
     resume_scalar_recovery_outbox_set, PendingRecoveryPublicationDecodeError,
     ScalarRecoveryResumeAction, ScalarRecoveryResumeError, ScalarRecoveryResumeReport,
     ScalarRecoveryResumeResult, ScalarRecoveryResumeSpec,
+};
+pub use resume_recovery_cycle::{
+    resume_scalar_recovery_outbox_set_bounded, ScalarRecoveryResumeCycleReport,
 };
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
