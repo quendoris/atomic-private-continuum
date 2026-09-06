@@ -11,6 +11,7 @@ mod publication;
 mod receive;
 mod resume;
 mod resume_batch;
+mod resume_batch_cycle;
 mod resume_cycle;
 mod trusted_state;
 
@@ -36,6 +37,9 @@ pub use resume::{
 pub use resume_batch::{
     resume_scalar_outbox_set, ScalarBatchResumeAction, ScalarBatchResumeError,
     ScalarBatchResumeReport, ScalarBatchResumeResult,
+};
+pub use resume_batch_cycle::{
+    resume_scalar_outbox_set_bounded, ScalarBatchResumeCycleReport,
 };
 pub use resume_cycle::{resume_single_scalar_domain_bounded, ScalarResumeCycleReport};
 pub use trusted_state::{
