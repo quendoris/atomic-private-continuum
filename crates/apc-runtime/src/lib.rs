@@ -28,8 +28,13 @@ impl core::fmt::Display for GitHubCursorCodecError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidUtf8 => write!(f, "GitHub transport cursor is not valid UTF-8"),
-            Self::InvalidCommitIdentity => write!(f, "GitHub transport cursor is not a valid commit identity"),
-            Self::InvalidTransportCursor => write!(f, "GitHub commit identity cannot be encoded as a transport cursor"),
+            Self::InvalidCommitIdentity => {
+                write!(f, "GitHub transport cursor is not a valid commit identity")
+            }
+            Self::InvalidTransportCursor => write!(
+                f,
+                "GitHub commit identity cannot be encoded as a transport cursor"
+            ),
         }
     }
 }
