@@ -196,7 +196,12 @@ mod tests {
         DomainKey::new(atom(1), domain.as_bytes()).unwrap()
     }
 
-    fn dirty_domain(base_revision: u64, epoch: u64, base: &str, draft: &str) -> LocalScalarDomain<Vec<u8>> {
+    fn dirty_domain(
+        base_revision: u64,
+        epoch: u64,
+        base: &str,
+        draft: &str,
+    ) -> LocalScalarDomain<Vec<u8>> {
         let mut causal = ScalarRegister::new();
         causal
             .assign(rid(base_revision), base.as_bytes().to_vec())
@@ -208,7 +213,12 @@ mod tests {
         domain
     }
 
-    fn remote_from_base(base_revision: u64, remote_revision: u64, base: &str, value: &str) -> ScalarRegister<Vec<u8>> {
+    fn remote_from_base(
+        base_revision: u64,
+        remote_revision: u64,
+        base: &str,
+        value: &str,
+    ) -> ScalarRegister<Vec<u8>> {
         let mut remote = ScalarRegister::new();
         remote
             .assign(rid(base_revision), base.as_bytes().to_vec())
@@ -248,7 +258,12 @@ mod tests {
             &mut store,
             &codec,
             &cursor_codec,
-            ReceivedRecoveryScalarState::new(&title_key, &remote_title, Some(rid(400)), &Revision(2)),
+            ReceivedRecoveryScalarState::new(
+                &title_key,
+                &remote_title,
+                Some(rid(400)),
+                &Revision(2),
+            ),
         )
         .unwrap()
         .unwrap();
@@ -317,7 +332,12 @@ mod tests {
             &mut store,
             &codec,
             &cursor_codec,
-            ReceivedRecoveryScalarState::new(&title_key, &remote_title, Some(rid(400)), &Revision(2)),
+            ReceivedRecoveryScalarState::new(
+                &title_key,
+                &remote_title,
+                Some(rid(400)),
+                &Revision(2)
+            ),
         )
         .is_err());
 
