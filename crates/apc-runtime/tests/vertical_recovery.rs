@@ -3,14 +3,20 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use apc_core::id::LOGICAL_ID_BYTES;
-use apc_core::{DurabilityBackend, LocalScalarDomain, RevisionId, ScalarRegister, WorkingEpochId};
-use apc_crypto::{protect, unprotect, ContentKey};
+use apc_core::{
+    AtomId, ContinuumId, DurabilityBackend, LocalScalarDomain, RevisionId, ScalarRegister,
+    WorkingEpochId,
+};
+use apc_crypto::ContentKey;
 use apc_runtime::{
-    recover_scalar_domain, stage_scalar_handoff, DevelopmentScalarTrustedStateCodec,
-    GitHubCursorCodec, ProtectedPublication, TrustedStateCodec,
+    prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
+    DevelopmentScalarTrustedStateCodec, GitHubCursorCodec, TrustedStateCodec,
 };
 use apc_storage_fs::UnixFsDurabilityBackend;
-use apc_sync::{DurableSyncRecord, ProtectedSyncRecordStore, PublicationId, TransportCursorCodec};
+use apc_sync::{
+    decode_protected_sync_part, unprotect_scalar_part, DomainKey, DurableSyncRecord,
+    ProtectedSyncRecordStore, PublicationId, TransportCursorCodec,
+};
 use apc_transport_github::GitHubCommitOid;
 
 static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -18,7 +24,6 @@ static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 const STORE_KEY: [u8; 32] = [0x71; 32];
 const PUBLICATION_KEY: [u8; 32] = [0x72; 32];
 const STORE_CONTEXT: &[u8] = b"apc-runtime-test/vertical-recovery/continuum-a";
-const PUBLICATION_CONTEXT: &[u8] = b"apc-runtime-test/protected-publication/continuum-a";
 
 struct TestDir(PathBuf);
 
@@ -60,9 +65,15 @@ fn wid(value: u64) -> WorkingEpochId {
 }
 
 fn pid(value: u64) -> PublicationId {
-    let mut bytes = [0_u8; 32];
-    bytes[24..].copy_from_slice(&value.to_be_bytes());
-    PublicationId::from_bytes(bytes)
+    PublicationId::from_bytes(logical_bytes(value))
+}
+
+fn cid(value: u64) -> ContinuumId {
+    ContinuumId::from_bytes(logical_bytes(value))
+}
+
+fn atom(value: u64) -> AtomId {
+    AtomId::from_bytes(logical_bytes(value))
 }
 
 fn prepared_domain() -> LocalScalarDomain<Vec<u8>> {
@@ -86,7 +97,7 @@ fn prepared_domain() -> LocalScalarDomain<Vec<u8>> {
 }
 
 #[test]
-fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_retry() {
+fn semantic_exposure_survives_real_sync_crypto_filesystem_restart_and_exact_outbox_retry() {
     let directory = TestDir::new();
     let codec = DevelopmentScalarTrustedStateCodec;
     let cursor_codec = GitHubCursorCodec;
@@ -97,13 +108,18 @@ fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_re
     let initial_trusted_state = codec.encode(&domain.snapshot()).unwrap();
     let mut record = DurableSyncRecord::new(initial_trusted_state, Some(cursor.clone()));
 
-    let clear_publication = b"portable-semantic-publication-secret";
-    let protected_object = protect(
-        &ContentKey::from_bytes(PUBLICATION_KEY),
-        PUBLICATION_CONTEXT,
-        clear_publication,
+    let semantic_key = DomainKey::new(atom(1), b"body".to_vec()).unwrap();
+    let publication_key = ContentKey::from_bytes(PUBLICATION_KEY);
+    let prepared = prepare_scalar_handoff(
+        &domain,
+        semantic_key.clone(),
+        cid(1),
+        pid(1),
+        &publication_key,
+        [rid(200)],
     )
     .unwrap();
+    let protected_object = prepared.publication().objects()[0].clone();
 
     let backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
     let mut store = ProtectedSyncRecordStore::new(
@@ -113,13 +129,12 @@ fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_re
     )
     .unwrap();
 
-    stage_scalar_handoff(
+    stage_prepared_scalar_handoff(
         &mut domain,
         &mut record,
         &mut store,
         &codec,
-        [rid(200)],
-        ProtectedPublication::new(pid(1), vec![protected_object.clone()]),
+        prepared,
     )
     .unwrap();
 
@@ -139,6 +154,9 @@ fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_re
     assert!(!raw_committed
         .windows(b"APCLREC1".len())
         .any(|window| window == b"APCLREC1"));
+    assert!(!raw_committed
+        .windows(b"local-finalized".len())
+        .any(|window| window == b"local-finalized"));
 
     drop(store);
     drop(record);
@@ -183,11 +201,20 @@ fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_re
         std::slice::from_ref(&protected_object)
     );
 
-    let opened_publication = unprotect(
+    let part = decode_protected_sync_part(&recovered_outbox.objects()[0]).unwrap();
+    let projection = unprotect_scalar_part(
         &ContentKey::from_bytes(PUBLICATION_KEY),
-        PUBLICATION_CONTEXT,
-        &recovered_outbox.objects()[0],
+        cid(1),
+        &part,
     )
     .unwrap();
-    assert_eq!(opened_publication, clear_publication);
+    let published = projection.get(&semantic_key).unwrap();
+
+    assert!(published.revision(rid(100)).is_some());
+    assert!(published.revision(rid(200)).is_some());
+    assert_eq!(published.len(), 2);
+    assert_eq!(
+        published.materialized().map(Vec::as_slice),
+        Some(b"local-finalized".as_slice())
+    );
 }
