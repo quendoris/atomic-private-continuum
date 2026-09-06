@@ -16,6 +16,9 @@ pub enum BatchPublishError<TransportError, CursorError> {
     Transport(TransportError),
 }
 
+pub type BatchPublishResult<R, TransportError, CursorError> =
+    Result<PublishOutcome<R>, BatchPublishError<TransportError, CursorError>>;
+
 /// Failure while durably reconciling a set of outbound publications together.
 #[derive(Debug)]
 pub enum BatchCommitError<StoreError, CursorError> {
@@ -41,7 +44,7 @@ pub fn publish_staged_batch<T, C, I>(
     publication_ids: I,
     transport: &mut T,
     codec: &C,
-) -> Result<PublishOutcome<T::Revision>, BatchPublishError<T::Error, C::Error>>
+) -> BatchPublishResult<T::Revision, T::Error, C::Error>
 where
     T: OpaqueTransport,
     C: TransportCursorCodec<T::Revision>,
