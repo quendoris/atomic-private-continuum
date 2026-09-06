@@ -3,6 +3,35 @@ use crate::{
     TransportCursorCodec,
 };
 
+/// Complete replacement material for one stale durable outbound publication.
+///
+/// A rebase never mutates the old protected bytes and never reuses their
+/// `PublicationId`. The replacement carries a fresh publication identity and
+/// already-protected wire objects built from the reconciled trusted state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutboxRebase {
+    stale_publication_id: PublicationId,
+    rebased_trusted_state: Vec<u8>,
+    new_publication_id: PublicationId,
+    new_protected_objects: Vec<Vec<u8>>,
+}
+
+impl OutboxRebase {
+    pub fn new(
+        stale_publication_id: PublicationId,
+        rebased_trusted_state: Vec<u8>,
+        new_publication_id: PublicationId,
+        new_protected_objects: Vec<Vec<u8>>,
+    ) -> Self {
+        Self {
+            stale_publication_id,
+            rebased_trusted_state,
+            new_publication_id,
+            new_protected_objects,
+        }
+    }
+}
+
 /// Atomically replace one stale durable outbound publication with a newly
 /// protected publication prepared against a newer reconciled transport head.
 ///
@@ -19,17 +48,14 @@ pub fn commit_rebased_outbox<S, C, R>(
     record: &mut DurableSyncRecord,
     store: &mut S,
     codec: &C,
-    stale_publication_id: PublicationId,
-    rebased_trusted_state: Vec<u8>,
-    new_publication_id: PublicationId,
-    new_protected_objects: Vec<Vec<u8>>,
+    rebase: OutboxRebase,
     new_head: &R,
 ) -> Result<(), SessionCommitError<S::Error, C::Error>>
 where
     S: SyncRecordStore,
     C: TransportCursorCodec<R>,
 {
-    if stale_publication_id == new_publication_id {
+    if rebase.stale_publication_id == rebase.new_publication_id {
         return Err(SessionCommitError::Recovery(
             SyncRecoveryError::PublicationIdentityCollision,
         ));
@@ -38,16 +64,16 @@ where
     let cursor = codec.encode(new_head).map_err(SessionCommitError::Cursor)?;
     let mut next = record.clone();
     next.retire_outbox(
-        stale_publication_id,
-        rebased_trusted_state.clone(),
+        rebase.stale_publication_id,
+        rebase.rebased_trusted_state.clone(),
         cursor.clone(),
     )
     .map_err(SessionCommitError::Recovery)?;
     next.prepare_outbox(
-        rebased_trusted_state,
-        new_publication_id,
+        rebase.rebased_trusted_state,
+        rebase.new_publication_id,
         Some(cursor),
-        new_protected_objects,
+        rebase.new_protected_objects,
     )
     .map_err(SessionCommitError::Recovery)?;
 
@@ -126,10 +152,12 @@ mod tests {
             &mut record,
             &mut store,
             &RevisionCodec,
-            pid(70),
-            b"rebased-exposed".to_vec(),
-            pid(71),
-            vec![b"rebased-protected".to_vec()],
+            OutboxRebase::new(
+                pid(70),
+                b"rebased-exposed".to_vec(),
+                pid(71),
+                vec![b"rebased-protected".to_vec()],
+            ),
             &Revision(71),
         )
         .unwrap();
@@ -175,10 +203,12 @@ mod tests {
             &mut record,
             &mut failing_store,
             &RevisionCodec,
-            pid(80),
-            b"rebased-exposed".to_vec(),
-            pid(81),
-            vec![b"rebased-protected".to_vec()],
+            OutboxRebase::new(
+                pid(80),
+                b"rebased-exposed".to_vec(),
+                pid(81),
+                vec![b"rebased-protected".to_vec()],
+            ),
             &Revision(81),
         )
         .is_err());
@@ -213,10 +243,12 @@ mod tests {
             &mut record,
             &mut store,
             &RevisionCodec,
-            pid(90),
-            b"rebased-exposed".to_vec(),
-            pid(90),
-            vec![b"different-protected".to_vec()],
+            OutboxRebase::new(
+                pid(90),
+                b"rebased-exposed".to_vec(),
+                pid(90),
+                vec![b"different-protected".to_vec()],
+            ),
             &Revision(91),
         )
         .unwrap_err();
