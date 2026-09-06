@@ -1,6 +1,6 @@
 # A.P.C. durable synchronization recovery
 
-Status: **transport-independent crash recovery, protected durable record storage, foreground transport gating, scalar foreground-resume orchestration, set-based multi-publication resume, bounded conflict follow-up, session/reconciliation/rebase transitions, deterministic scalar trusted-state recovery and typed outbound/inbound semantic boundaries are implemented; Android power-loss behavior and final portable/local encodings remain unfrozen**.
+Status: **transport-independent crash recovery, protected durable record storage, foreground transport gating, scalar foreground-resume orchestration, set-based multi-publication resume, bounded conflict follow-up, complete authenticated multipart durable-cursor catch-up, session/reconciliation/rebase transitions, deterministic scalar trusted-state recovery and typed outbound/inbound semantic boundaries are implemented; Android power-loss behavior and final portable/local encodings remain unfrozen**.
 
 This document records the local durability rules between semantic state and an opaque transport such as GitHub. It supplements `SYNC.md`, `SYNC_CAPSULES.md`, `DURABILITY.md`, `CORE_IMPLEMENTATION.md` and `SYNC_IMPLEMENTATION.md`.
 
@@ -347,9 +347,41 @@ On persistence failure the live domain remains dirty, the pre-observation local 
 
 ## 9. Multipart inbound visibility
 
-`MultipartInbox` authenticates and accumulates parts internally. No semantic projection is returned until the entire declared publication is present.
+`MultipartInbox` authenticates parts and exposes a projection only after every declared part of that publication has arrived. `decode_complete_scalar_domain_objects()` now lifts that primitive to one fetched transport range.
 
-The current runtime catch-up still consumes complete single-part scalar objects through `decode_single_scalar_domain_object()`. Wiring complete authenticated multipart assembly into the durable-cursor catch-up boundary is still open. Until that is implemented, incomplete parts must never be fed piecemeal to `commit_received_scalar_domain()`, and the cursor must never be advanced past an incomplete publication merely because some other publication in the fetched range is complete.
+The durable-cursor rule is:
+
+```text
+fetch R0 -> R1
+        |
+decode every protected wire object
+        |
+authenticate every part
+        |
+assemble every publication in range
+        |
+any publication incomplete?
+      /             \
+    yes             no
+     |               |
+ fail closed       merge all complete
+     |             authenticated scalar state
+ state unchanged      |
+ cursor stays R0      |
+                    one semantic observation
+                        |
+                    one durability barrier
+                        |
+                    cursor = R1
+```
+
+The multipart inbox is intentionally ephemeral at this stage. An incomplete fetched range is not persisted as half-assembled semantic state; the old durable cursor remains authoritative so the same range can be fetched again later. A complete publication that happens to share a range with an incomplete publication is discarded with the failed candidate rather than becoming visible early.
+
+Parts may arrive in any order. Complete multipart publications may be interleaved. All fully assembled scalar registers are merged before the single semantic observation boundary, so transport completion order cannot become causal order and a dirty local working epoch is sealed at most once for the range.
+
+Identical duplicate parts while a publication is still pending are harmless. An authenticated conflicting duplicate for the same publication/part slot fails closed with `MultipartPartCollision`. The current exact-byte retry contract still requires a publication identity to retain its original protected bytes; re-protection or semantic replacement uses a fresh `PublicationId`.
+
+`decode_single_scalar_domain_object()` remains as the intentionally narrow inverse for code paths that require exactly one complete single-part publication. Durable catch-up itself now uses the complete range assembler.
 
 ## 10. Protected durable record store
 
@@ -460,6 +492,16 @@ After that failure, the local recovery record is still exactly the old durable `
 
 The next resume fetches the accepted protected objects from `R1 -> R2`, authenticates them, proves the complete causal closures for both pending publications, advances semantic state/cursor durably and retires both publications as one observed set. The transport publish call count remains one: recovery does not send either publication again.
 
+### 12.5 Multipart range atomicity
+
+The multipart catch-up tests cover both sides of the range boundary.
+
+A two-part publication arriving in reverse part order authenticates and assembles before observation. With a dirty local epoch, all remote state is merged first and the local epoch is sealed once against its captured pre-remote frontier.
+
+The inverse test places one complete publication beside one incomplete multipart publication in the same fetched range. The decoder reports the incomplete publication, the otherwise complete publication remains semantically invisible, the dirty local epoch remains dirty, no remote revision is inserted, the durability store is untouched and the durable cursor does not advance.
+
+Additional adversarial assembly tests interleave two complete multipart publications in an order deliberately unrelated to their `PublicationId` byte ordering, accept an identical duplicate part while pending, and reject an authenticated conflicting duplicate part.
+
 ## 13. Foreground-only transport gate and bounded resume
 
 `ForegroundSyncLifecycle` and `ForegroundTransport<T>` start closed. Platform code must explicitly enter foreground before new `head`, `fetch_since` or `publish` calls reach transport.
@@ -524,7 +566,12 @@ The deterministic Rust suite now covers, among other cases:
 26. unresolved stale set blocking a newer/current set without implicit cross-generation ordering;
 27. authenticated catch-up reconciling an entire stale lost-ACK set without republish;
 28. bounded batch conflict performing exactly one follow-up catch-up and stopping at set `NeedsRebase`;
-29. remote acceptance of a batch followed by local reconciliation failure and later authenticated set recovery with no second publish.
+29. remote acceptance of a batch followed by local reconciliation failure and later authenticated set recovery with no second publish;
+30. complete multipart catch-up with reversed part order and one semantic observation boundary;
+31. a complete publication beside an incomplete multipart publication causing no semantic mutation or cursor advance;
+32. interleaved complete multipart publications remaining independent of `PublicationId` ordering;
+33. identical duplicate multipart part delivery while pending remaining harmless;
+34. authenticated conflicting duplicate multipart part delivery failing closed.
 
 ## 15. What remains unproved/unfrozen
 
@@ -534,7 +581,7 @@ The current implementation does not yet prove or freeze:
 - final `.apc` storage layout;
 - final complete-continuum local recovery encoding;
 - compact long-lived causal membership/checkpoint representation;
-- multipart runtime receive orchestration and incomplete-range cursor policy;
+- persistence or reconstruction policy for multipart assembly if a future transport API cannot return a complete durable-cursor range in one logical fetch;
 - production lifecycle/sequence/hierarchy persistence semantics;
 - attachment chunk reachability/recovery;
 - replica authentication/key evolution;
@@ -578,7 +625,7 @@ The oracle must inspect semantic state, working epoch, finalization/exposure boo
 
 The next durability-oriented slices should:
 
-1. wire complete authenticated multipart assembly into durable-cursor runtime catch-up without ever advancing the cursor past an incomplete publication;
+1. harden multipart fetched-range replay/duplication behavior and transport-range assumptions without persisting partial semantic visibility;
 2. add repeated multi-publication conflict/rebase-chain and fetch-failure adversarial tests;
 3. introduce a complete local trusted-state container abstraction for several independent merge domains without smuggling in cross-domain transaction semantics;
 4. keep stale-set semantic re-export above the transport/session layer and require a fresh `PublicationId` for every replacement;
