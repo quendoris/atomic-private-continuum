@@ -7,6 +7,7 @@
 //! becoming portable format semantics.
 
 mod publication;
+mod receive;
 mod trusted_state;
 
 use apc_sync::{TransportCursor, TransportCursorCodec};
@@ -16,6 +17,10 @@ pub use publication::{
     prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
     PreparedScalarHandoff, ProtectedPublication, ScalarHandoffStageError,
     ScalarPublicationPrepareError, ScalarRecoveryError, TrustedStateCodec,
+};
+pub use receive::{
+    commit_received_scalar_domain, decode_single_scalar_domain_object, ScalarObjectDecodeError,
+    ScalarReceiveCommitError,
 };
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
