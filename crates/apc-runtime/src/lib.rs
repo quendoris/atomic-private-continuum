@@ -9,6 +9,7 @@
 mod catchup;
 mod catchup_set;
 mod publication;
+mod publication_set;
 mod receive;
 mod receive_set;
 mod resume;
@@ -33,6 +34,10 @@ pub use publication::{
     prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
     PreparedScalarHandoff, ProtectedPublication, ScalarHandoffStageError,
     ScalarPublicationPrepareError, ScalarRecoveryError, TrustedStateCodec,
+};
+pub use publication_set::{
+    prepare_recovery_handoff, stage_prepared_recovery_handoff, PreparedRecoveryHandoff,
+    RecoveryHandoffStageError, RecoveryPublicationPrepareError,
 };
 pub use receive::{
     commit_received_scalar_domain, decode_complete_scalar_domain_objects,
