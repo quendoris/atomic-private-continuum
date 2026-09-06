@@ -17,9 +17,7 @@ mod transport;
 mod wire;
 
 pub use codec::{decode_scalar_projection, encode_scalar_projection, SyncCodecError};
-pub use foreground::{
-    ForegroundSyncLifecycle, ForegroundTransport, ForegroundTransportError,
-};
+pub use foreground::{ForegroundSyncLifecycle, ForegroundTransport, ForegroundTransportError};
 pub use projection::{
     DirtyDomainState, DomainKey, ProjectionError, ScalarDirtyDomainState, ScalarSyncProjection,
     SyncProjection,
