@@ -149,7 +149,9 @@ fn inbound_commit_failure_cannot_advance_only_the_in_memory_cursor() {
 
     assert_eq!(record, before);
     assert_eq!(
-        RevisionCodec.decode(record.applied_cursor().unwrap()).unwrap(),
+        RevisionCodec
+            .decode(record.applied_cursor().unwrap())
+            .unwrap(),
         Revision(20)
     );
 }
@@ -182,7 +184,9 @@ fn reconcile_commit_failure_keeps_pending_outbox_and_old_cursor() {
     assert_eq!(record, before);
     assert!(record.outbox().contains_key(&pid(3)));
     assert_eq!(
-        RevisionCodec.decode(record.applied_cursor().unwrap()).unwrap(),
+        RevisionCodec
+            .decode(record.applied_cursor().unwrap())
+            .unwrap(),
         Revision(30)
     );
 }
