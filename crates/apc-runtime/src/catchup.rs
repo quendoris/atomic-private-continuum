@@ -564,9 +564,9 @@ mod tests {
 
         assert!(matches!(
             error,
-            ScalarCatchUpError::Decode(
-                ScalarObjectDecodeError::IncompleteMultipartPublications { count: 1 }
-            )
+            ScalarCatchUpError::Decode(ScalarObjectDecodeError::IncompleteMultipartPublications {
+                count: 1
+            })
         ));
         assert_eq!(domain, before_domain);
         assert_eq!(record, before_record);
