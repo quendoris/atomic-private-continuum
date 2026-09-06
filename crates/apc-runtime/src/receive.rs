@@ -5,8 +5,8 @@ use apc_core::{
 use apc_crypto::ContentKey;
 use apc_sync::{
     commit_received, decode_protected_sync_part, unprotect_scalar_part, DomainKey,
-    DurableSyncRecord, ProtectedPartCodecError, SessionCommitError, SyncPartError, SyncRecordStore,
-    TransportCursorCodec,
+    DurableSyncRecord, MultipartInbox, ProtectedPartCodecError, SessionCommitError, SyncPartError,
+    SyncRecordStore, TransportCursorCodec,
 };
 
 use crate::publication::TrustedStateCodec;
@@ -16,6 +16,7 @@ pub enum ScalarObjectDecodeError {
     Wire(ProtectedPartCodecError),
     Protection(SyncPartError),
     MultipartUnsupported,
+    IncompleteMultipartPublications { count: usize },
     UnexpectedDomainCount { count: usize },
     MissingExpectedDomain,
 }
@@ -31,6 +32,10 @@ impl core::fmt::Display for ScalarObjectDecodeError {
                     "single-object scalar receive path cannot accept multipart state"
                 )
             }
+            Self::IncompleteMultipartPublications { count } => write!(
+                f,
+                "fetched scalar range contains {count} incomplete multipart publications"
+            ),
             Self::UnexpectedDomainCount { count } => {
                 write!(f, "single-domain scalar object contains {count} domains")
             }
@@ -50,6 +55,7 @@ impl std::error::Error for ScalarObjectDecodeError {
             Self::Wire(error) => Some(error),
             Self::Protection(error) => Some(error),
             Self::MultipartUnsupported
+            | Self::IncompleteMultipartPublications { .. }
             | Self::UnexpectedDomainCount { .. }
             | Self::MissingExpectedDomain => None,
         }
@@ -121,7 +127,7 @@ impl<'a, T, R> ReceivedScalarState<'a, T, R> {
 /// Decode and authenticate one complete single-domain scalar sync object.
 ///
 /// This is the inverse of the current one-part `prepare_scalar_handoff()` path.
-/// Multipart assembly remains owned by `MultipartInbox`; this helper deliberately
+/// Multipart assembly is owned by `MultipartInbox`; this helper deliberately
 /// refuses to make an incomplete or multi-domain object observable by accident.
 pub fn decode_single_scalar_domain_object(
     key: &ContentKey,
@@ -135,6 +141,55 @@ pub fn decode_single_scalar_domain_object(
     }
 
     let projection = unprotect_scalar_part(key, continuum_id, &part)?;
+    scalar_register_from_projection(&projection, expected_domain)
+}
+
+/// Decode, authenticate and completely assemble every scalar publication carried
+/// by one fetched transport range before returning any semantic state to the
+/// caller.
+///
+/// The inbox is intentionally local to this operation. If any publication is
+/// still incomplete after the entire fetched object set has been consumed, the
+/// operation fails and discards every completed projection collected alongside
+/// it. A caller can therefore refuse the transport cursor advance and safely
+/// refetch the same durable range later instead of persisting partial assembly.
+///
+/// Completed publications must each contain exactly one expected scalar domain.
+/// Parts may arrive in any order and identical duplicates while a publication is
+/// pending remain harmless through `MultipartInbox`.
+pub fn decode_complete_scalar_domain_objects(
+    key: &ContentKey,
+    continuum_id: ContinuumId,
+    expected_domain: &DomainKey,
+    encoded_objects: &[Vec<u8>],
+) -> Result<Vec<ScalarRegister<Vec<u8>>>, ScalarObjectDecodeError> {
+    let mut inbox = MultipartInbox::new();
+    let mut completed = Vec::new();
+
+    for encoded in encoded_objects {
+        let part = decode_protected_sync_part(encoded)?;
+        if let Some(projection) = inbox.ingest(key, continuum_id, part)? {
+            completed.push(scalar_register_from_projection(
+                &projection,
+                expected_domain,
+            )?);
+        }
+    }
+
+    let incomplete = inbox.pending_publications();
+    if incomplete != 0 {
+        return Err(ScalarObjectDecodeError::IncompleteMultipartPublications {
+            count: incomplete,
+        });
+    }
+
+    Ok(completed)
+}
+
+fn scalar_register_from_projection(
+    projection: &apc_sync::ScalarSyncProjection,
+    expected_domain: &DomainKey,
+) -> Result<ScalarRegister<Vec<u8>>, ScalarObjectDecodeError> {
     if projection.len() != 1 {
         return Err(ScalarObjectDecodeError::UnexpectedDomainCount {
             count: projection.len(),
@@ -193,11 +248,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use apc_core::id::LOGICAL_ID_BYTES;
     use apc_core::{AtomId, WorkingEpochId};
-    use apc_sync::{PublicationId, TransportCursor};
+    use apc_sync::{
+        encode_protected_sync_part, protect_scalar_part, PublicationId, SyncProjection,
+        TransportCursor,
+    };
 
     use crate::{prepare_scalar_handoff, DevelopmentScalarTrustedStateCodec, TrustedStateCodec};
 
@@ -289,6 +347,37 @@ mod tests {
         domain
     }
 
+    fn multipart_wire(
+        key: &ContentKey,
+        publication_id: PublicationId,
+        first_revision: RevisionId,
+        second_revision: RevisionId,
+    ) -> Vec<Vec<u8>> {
+        let semantic_key = domain_key();
+
+        let mut first = ScalarRegister::new();
+        first
+            .assign(first_revision, b"multipart-first".to_vec())
+            .unwrap();
+        let first_projection =
+            SyncProjection::from_domains(BTreeMap::from([(semantic_key.clone(), first)]));
+
+        let mut second = ScalarRegister::new();
+        second
+            .assign(second_revision, b"multipart-second".to_vec())
+            .unwrap();
+        let second_projection =
+            SyncProjection::from_domains(BTreeMap::from([(semantic_key, second)]));
+
+        let part0 = protect_scalar_part(key, cid(1), publication_id, 0, 2, &first_projection).unwrap();
+        let part1 = protect_scalar_part(key, cid(1), publication_id, 1, 2, &second_projection).unwrap();
+
+        vec![
+            encode_protected_sync_part(&part0).unwrap(),
+            encode_protected_sync_part(&part1).unwrap(),
+        ]
+    }
+
     #[test]
     fn protected_object_decodes_to_exact_expected_scalar_domain() {
         let key = ContentKey::from_bytes([0x81; 32]);
@@ -315,6 +404,41 @@ mod tests {
         assert!(decoded.revision(rid(100)).is_some());
         assert!(decoded.revision(rid(900)).is_some());
         assert_eq!(decoded.len(), 2);
+    }
+
+    #[test]
+    fn complete_multipart_range_is_returned_only_after_all_parts_authenticate() {
+        let key = ContentKey::from_bytes([0x82; 32]);
+        let semantic_key = domain_key();
+        let mut wire = multipart_wire(&key, pid(7), rid(700), rid(701));
+        wire.reverse();
+
+        let complete =
+            decode_complete_scalar_domain_objects(&key, cid(1), &semantic_key, &wire).unwrap();
+
+        assert_eq!(complete.len(), 1);
+        assert!(complete[0].revision(rid(700)).is_some());
+        assert!(complete[0].revision(rid(701)).is_some());
+    }
+
+    #[test]
+    fn incomplete_multipart_range_returns_no_semantic_state() {
+        let key = ContentKey::from_bytes([0x83; 32]);
+        let semantic_key = domain_key();
+        let wire = multipart_wire(&key, pid(8), rid(800), rid(801));
+
+        let error = decode_complete_scalar_domain_objects(
+            &key,
+            cid(1),
+            &semantic_key,
+            &wire[..1],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ScalarObjectDecodeError::IncompleteMultipartPublications { count: 1 }
+        ));
     }
 
     #[test]
