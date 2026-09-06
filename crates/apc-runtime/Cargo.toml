@@ -7,5 +7,6 @@ description = "Platform-neutral runtime orchestration for Atomic Private Continu
 publish = false
 
 [dependencies]
+apc-core = { path = "../apc-core" }
 apc-sync = { path = "../apc-sync" }
 apc-transport-github = { path = "../apc-transport-github" }
