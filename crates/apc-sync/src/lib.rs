@@ -7,6 +7,7 @@
 //! concerns and never participate in causal or merge ordering.
 
 mod codec;
+mod foreground;
 mod projection;
 mod protected;
 mod record_store;
@@ -16,6 +17,9 @@ mod transport;
 mod wire;
 
 pub use codec::{decode_scalar_projection, encode_scalar_projection, SyncCodecError};
+pub use foreground::{
+    ForegroundSyncLifecycle, ForegroundTransport, ForegroundTransportError,
+};
 pub use projection::{
     DirtyDomainState, DomainKey, ProjectionError, ScalarDirtyDomainState, ScalarSyncProjection,
     SyncProjection,
