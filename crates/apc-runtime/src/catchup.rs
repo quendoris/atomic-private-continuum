@@ -10,7 +10,7 @@ use apc_sync::{
 };
 
 use crate::{
-    commit_received_scalar_domain, decode_single_scalar_domain_object, ReceivedScalarState,
+    commit_received_scalar_domain, decode_complete_scalar_domain_objects, ReceivedScalarState,
     ScalarObjectDecodeError, ScalarReceiveCommitError, TrustedStateCodec,
 };
 
@@ -63,6 +63,8 @@ pub enum ScalarCatchUpOutcome<R> {
     },
     Applied {
         head: R,
+        /// Number of protected transport wire objects consumed by this catch-up.
+        /// A multipart publication may contribute more than one object.
         object_count: usize,
         /// Revision identities proven to have arrived in authenticated remote
         /// scalar state during this catch-up pass. These are transport-observation
@@ -100,19 +102,25 @@ pub type ScalarCatchUpResult<R, TransportError, TrustedError, StoreError, Cursor
 /// this function while backgrounded fails before transport I/O and leaves all
 /// semantic/durable state untouched.
 ///
-/// Every returned protected object must decode as one complete authenticated
-/// single-part publication for `spec.domain_key`. All decoded scalar states are
-/// merged before a single semantic observation boundary is crossed. Dirty local
-/// work is therefore sealed once against the frontier it actually observed, not
-/// once per fetched transport object.
+/// Every returned protected wire object is decoded and authenticated into a
+/// range-local multipart inbox. No scalar projection from the range becomes
+/// semantically observable until every declared publication in that fetched range
+/// is complete. If even one multipart publication remains incomplete, catch-up
+/// fails before semantic mutation and before durable cursor advancement, so the
+/// same transport range can be safely refetched later.
 ///
-/// `Applied::observed_revision_ids` records only identities present in the
-/// authenticated remote register assembled during this pass. It deliberately
-/// does not infer transport observation from identities that were already present
-/// in local state, which is required for lost-ack reconciliation.
+/// Once the whole range is complete, all assembled scalar states are merged before
+/// a single semantic observation boundary is crossed. Dirty local work is therefore
+/// sealed once against the frontier it actually observed, not once per transport
+/// object or multipart publication.
 ///
-/// The typed result intentionally preserves transport, trusted-state, durability
-/// and cursor failures as distinct error channels at this composition seam.
+/// `Applied::observed_revision_ids` records only identities present in the fully
+/// authenticated remote register assembled during this pass. It deliberately does
+/// not infer transport observation from identities that were already present in
+/// local state, which is required for lost-ack reconciliation.
+///
+/// The typed result intentionally preserves transport, decoding/authentication,
+/// trusted-state, durability and cursor failures as distinct error channels.
 #[allow(clippy::type_complexity)]
 pub fn catch_up_single_scalar_domain<T, S, TC, CC>(
     domain: &mut LocalScalarDomain<Vec<u8>>,
@@ -148,23 +156,24 @@ where
             }
 
             let object_count = objects.len();
-            let mut combined_remote: Option<apc_core::ScalarRegister<Vec<u8>>> = None;
-            for encoded in objects {
-                let decoded = decode_single_scalar_domain_object(
-                    spec.key,
-                    spec.continuum_id,
-                    spec.domain_key,
-                    &encoded,
-                )
-                .map_err(ScalarCatchUpError::Decode)?;
+            let decoded = decode_complete_scalar_domain_objects(
+                spec.key,
+                spec.continuum_id,
+                spec.domain_key,
+                &objects,
+            )
+            .map_err(ScalarCatchUpError::Decode)?;
 
+            let mut combined_remote: Option<apc_core::ScalarRegister<Vec<u8>>> = None;
+            for register in decoded {
                 combined_remote = Some(match combined_remote {
-                    None => decoded,
-                    Some(current) => current.merge(&decoded).map_err(ScalarCatchUpError::Core)?,
+                    None => register,
+                    Some(current) => current.merge(&register).map_err(ScalarCatchUpError::Core)?,
                 });
             }
 
-            let remote = combined_remote.expect("non-empty object set produces remote state");
+            let remote = combined_remote
+                .expect("non-empty complete fetched object range produces authenticated state");
             let observed_revision_ids = remote.revisions().map(|revision| revision.id).collect();
             let sealed_local = commit_received_scalar_domain(
                 domain,
@@ -188,11 +197,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use apc_core::id::LOGICAL_ID_BYTES;
     use apc_core::{AtomId, ScalarRegister, WorkingEpochId};
     use apc_sync::{
-        ForegroundSyncLifecycle, ForegroundTransportError, PublicationId, PublishOutcome,
-        SyncRecordStore, TransportCursor,
+        encode_protected_sync_part, protect_scalar_part, ForegroundSyncLifecycle,
+        ForegroundTransportError, PublicationId, PublishOutcome, SyncProjection, SyncRecordStore,
+        TransportCursor,
     };
 
     use crate::{prepare_scalar_handoff, DevelopmentScalarTrustedStateCodec};
@@ -321,6 +333,39 @@ mod tests {
         domain
     }
 
+    fn multipart_objects(
+        key: &ContentKey,
+        publication_id: PublicationId,
+        first_revision: RevisionId,
+        second_revision: RevisionId,
+    ) -> Vec<Vec<u8>> {
+        let semantic_key = domain_key();
+
+        let mut first = ScalarRegister::new();
+        first
+            .assign(first_revision, b"multipart-first".to_vec())
+            .unwrap();
+        let first_projection =
+            SyncProjection::from_domains(BTreeMap::from([(semantic_key.clone(), first)]));
+
+        let mut second = ScalarRegister::new();
+        second
+            .assign(second_revision, b"multipart-second".to_vec())
+            .unwrap();
+        let second_projection =
+            SyncProjection::from_domains(BTreeMap::from([(semantic_key, second)]));
+
+        let first_part =
+            protect_scalar_part(key, cid(1), publication_id, 0, 2, &first_projection).unwrap();
+        let second_part =
+            protect_scalar_part(key, cid(1), publication_id, 1, 2, &second_projection).unwrap();
+
+        vec![
+            encode_protected_sync_part(&first_part).unwrap(),
+            encode_protected_sync_part(&second_part).unwrap(),
+        ]
+    }
+
     #[test]
     fn background_blocks_resume_catch_up_then_foreground_applies_once() {
         let key = ContentKey::from_bytes([0x91; 32]);
@@ -410,6 +455,132 @@ mod tests {
         );
         assert_eq!(transport.inner().fetch_calls, 1);
         assert_eq!(store.committed.as_ref(), Some(&record));
+    }
+
+    #[test]
+    fn out_of_order_multipart_range_applies_once_after_complete_assembly() {
+        let key = ContentKey::from_bytes([0x93; 32]);
+        let semantic_key = domain_key();
+        let cursor_codec = RevisionCodec;
+        let trusted_codec = DevelopmentScalarTrustedStateCodec;
+        let mut objects = multipart_objects(&key, pid(30), rid(900), rid(901));
+        objects.reverse();
+
+        let mut domain = dirty_receiver();
+        let mut record = DurableSyncRecord::new(
+            trusted_codec.encode(&domain.snapshot()).unwrap(),
+            Some(cursor_codec.encode(&Revision(1)).unwrap()),
+        );
+        let mut store = MemoryStore::default();
+        let mut transport = CatchUpTransport {
+            head: Revision(2),
+            objects,
+            fetch_calls: 0,
+        };
+
+        let outcome = catch_up_single_scalar_domain(
+            &mut domain,
+            &mut record,
+            &mut store,
+            &trusted_codec,
+            &cursor_codec,
+            &mut transport,
+            ScalarCatchUpSpec::new(&key, cid(1), &semantic_key, Some(rid(200))),
+        )
+        .unwrap();
+
+        let ScalarCatchUpOutcome::Applied {
+            head,
+            object_count,
+            observed_revision_ids,
+            sealed_local,
+        } = outcome
+        else {
+            panic!("expected assembled multipart catch-up")
+        };
+
+        assert_eq!(head, Revision(2));
+        assert_eq!(object_count, 2);
+        assert_eq!(observed_revision_ids, BTreeSet::from([rid(900), rid(901)]));
+        assert_eq!(sealed_local.unwrap().parents, BTreeSet::from([rid(100)]));
+        assert_eq!(
+            domain.causal().frontier_ids(),
+            BTreeSet::from([rid(200), rid(900), rid(901)])
+        );
+        assert_eq!(
+            cursor_codec
+                .decode(record.applied_cursor().unwrap())
+                .unwrap(),
+            Revision(2)
+        );
+        assert_eq!(store.committed.as_ref(), Some(&record));
+    }
+
+    #[test]
+    fn complete_plus_incomplete_range_keeps_everything_invisible_and_cursor_old() {
+        let key = ContentKey::from_bytes([0x94; 32]);
+        let semantic_key = domain_key();
+        let cursor_codec = RevisionCodec;
+        let trusted_codec = DevelopmentScalarTrustedStateCodec;
+
+        let complete = prepare_scalar_handoff(
+            &sender(),
+            semantic_key.clone(),
+            cid(1),
+            pid(40),
+            &key,
+            [rid(900)],
+        )
+        .unwrap();
+        let incomplete = multipart_objects(&key, pid(41), rid(910), rid(911));
+
+        let mut domain = dirty_receiver();
+        let before_domain = domain.clone();
+        let mut record = DurableSyncRecord::new(
+            trusted_codec.encode(&domain.snapshot()).unwrap(),
+            Some(cursor_codec.encode(&Revision(1)).unwrap()),
+        );
+        let before_record = record.clone();
+        let mut store = MemoryStore::default();
+        let mut transport = CatchUpTransport {
+            head: Revision(2),
+            objects: vec![
+                complete.publication().objects()[0].clone(),
+                incomplete[0].clone(),
+            ],
+            fetch_calls: 0,
+        };
+
+        let error = catch_up_single_scalar_domain(
+            &mut domain,
+            &mut record,
+            &mut store,
+            &trusted_codec,
+            &cursor_codec,
+            &mut transport,
+            ScalarCatchUpSpec::new(&key, cid(1), &semantic_key, Some(rid(200))),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ScalarCatchUpError::Decode(
+                ScalarObjectDecodeError::IncompleteMultipartPublications { count: 1 }
+            )
+        ));
+        assert_eq!(domain, before_domain);
+        assert_eq!(record, before_record);
+        assert!(domain.pending().is_some());
+        assert!(domain.causal().revision(rid(200)).is_none());
+        assert!(domain.causal().revision(rid(900)).is_none());
+        assert!(store.committed.is_none());
+        assert_eq!(transport.fetch_calls, 1);
+        assert_eq!(
+            cursor_codec
+                .decode(record.applied_cursor().unwrap())
+                .unwrap(),
+            Revision(1)
+        );
     }
 
     #[test]
