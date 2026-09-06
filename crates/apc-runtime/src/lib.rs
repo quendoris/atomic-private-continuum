@@ -19,8 +19,8 @@ pub use publication::{
     ScalarPublicationPrepareError, ScalarRecoveryError, TrustedStateCodec,
 };
 pub use receive::{
-    commit_received_scalar_domain, decode_single_scalar_domain_object, ScalarObjectDecodeError,
-    ScalarReceiveCommitError,
+    commit_received_scalar_domain, decode_single_scalar_domain_object, ReceivedScalarState,
+    ScalarObjectDecodeError, ScalarReceiveCommitError, ScalarReceiveResult,
 };
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
