@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use apc_core::{
     ContinuumId, CoreError, LocalScalarDomain, LocalScalarSnapshot, RevisionId, ScalarRegister,
     ScalarRevision,
@@ -155,8 +157,10 @@ pub fn decode_single_scalar_domain_object(
 /// refetch the same durable range later instead of persisting partial assembly.
 ///
 /// Completed publications must each contain exactly one expected scalar domain.
-/// Parts may arrive in any order and identical duplicates while a publication is
-/// pending remain harmless through `MultipartInbox`.
+/// Parts may arrive in any order. Exact wire-object duplicates anywhere in the
+/// fetched range are ignored before assembly, including duplicates replayed after
+/// a publication already completed. Non-identical duplicates still reach the
+/// authenticated multipart collision checks instead of being guessed equivalent.
 pub fn decode_complete_scalar_domain_objects(
     key: &ContentKey,
     continuum_id: ContinuumId,
@@ -165,8 +169,13 @@ pub fn decode_complete_scalar_domain_objects(
 ) -> Result<Vec<ScalarRegister<Vec<u8>>>, ScalarObjectDecodeError> {
     let mut inbox = MultipartInbox::new();
     let mut completed = Vec::new();
+    let mut seen_wire_objects: BTreeSet<&[u8]> = BTreeSet::new();
 
     for encoded in encoded_objects {
+        if !seen_wire_objects.insert(encoded.as_slice()) {
+            continue;
+        }
+
         let part = decode_protected_sync_part(encoded)?;
         if let Some(projection) = inbox.ingest(key, continuum_id, part)? {
             completed.push(scalar_register_from_projection(
