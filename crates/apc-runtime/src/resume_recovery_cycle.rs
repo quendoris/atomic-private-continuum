@@ -92,9 +92,7 @@ mod tests {
         AtomId, ContinuumId, LocalScalarDomain, RevisionId, ScalarRegister, WorkingEpochId,
     };
     use apc_crypto::ContentKey;
-    use apc_sync::{
-        FetchOutcome, PublicationId, PublishOutcome, SyncRecordStore, TransportCursor,
-    };
+    use apc_sync::{FetchOutcome, PublicationId, PublishOutcome, SyncRecordStore, TransportCursor};
 
     use crate::{
         prepare_recovery_handoff, stage_prepared_recovery_handoff,
@@ -264,14 +262,8 @@ mod tests {
             ]),
         )
         .unwrap();
-        stage_prepared_recovery_handoff(
-            &mut recovery,
-            &mut record,
-            &mut store,
-            &codec,
-            prepared,
-        )
-        .unwrap();
+        stage_prepared_recovery_handoff(&mut recovery, &mut record, &mut store, &codec, prepared)
+            .unwrap();
 
         let mut transport = ConflictOnceTransport {
             head: Revision(1),
@@ -304,7 +296,9 @@ mod tests {
         let post = report.post_conflict.expect("exactly one follow-up pass");
         assert_eq!(
             post.catch_up,
-            ScalarRecoveryCatchUpOutcome::CursorAdvancedWithoutSemanticObjects { head: Revision(2) }
+            ScalarRecoveryCatchUpOutcome::CursorAdvancedWithoutSemanticObjects {
+                head: Revision(2)
+            }
         );
         assert_eq!(
             post.action,
