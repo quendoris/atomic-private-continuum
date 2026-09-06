@@ -69,7 +69,10 @@ pub fn resume_single_scalar_domain<T, S, TC, CC>(
     cursor_codec: &CC,
     transport: &mut T,
     catch_up_spec: ScalarCatchUpSpec<'_>,
-) -> Result<ScalarResumeReport<T::Revision>, ScalarResumeError<T::Error, TC::Error, S::Error, CC::Error>>
+) -> Result<
+    ScalarResumeReport<T::Revision>,
+    ScalarResumeError<T::Error, TC::Error, S::Error, CC::Error>,
+>
 where
     T: OpaqueTransport,
     S: SyncRecordStore,
@@ -158,9 +161,7 @@ mod tests {
     use apc_core::id::LOGICAL_ID_BYTES;
     use apc_core::{AtomId, ContinuumId, RevisionId, ScalarRegister};
     use apc_crypto::ContentKey;
-    use apc_sync::{
-        stage_outbound, DomainKey, FetchOutcome, SyncRecordStore, TransportCursor,
-    };
+    use apc_sync::{stage_outbound, DomainKey, FetchOutcome, SyncRecordStore, TransportCursor};
 
     use crate::DevelopmentScalarTrustedStateCodec;
 
