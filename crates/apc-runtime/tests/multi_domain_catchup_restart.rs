@@ -203,15 +203,8 @@ fn multi_domain_authenticated_catchup_survives_encrypted_filesystem_restart() {
         ),
     ]));
     let publication_key = ContentKey::from_bytes(PUBLICATION_KEY);
-    let protected = protect_scalar_part(
-        &publication_key,
-        cid(1),
-        pid(1),
-        0,
-        1,
-        &remote_projection,
-    )
-    .unwrap();
+    let protected =
+        protect_scalar_part(&publication_key, cid(1), pid(1), 0, 1, &remote_projection).unwrap();
     let mut transport = RangeTransport {
         head: TransportRevision(2),
         objects: vec![encode_protected_sync_part(&protected).unwrap()],
@@ -228,10 +221,8 @@ fn multi_domain_authenticated_catchup_survives_encrypted_filesystem_restart() {
         STORE_CONTEXT.to_vec(),
     )
     .unwrap();
-    let pre_observation = BTreeMap::from([
-        (body_key.clone(), rid(200)),
-        (title_key.clone(), rid(400)),
-    ]);
+    let pre_observation =
+        BTreeMap::from([(body_key.clone(), rid(200)), (title_key.clone(), rid(400))]);
 
     let outcome = catch_up_scalar_recovery_state(
         &mut recovery,
