@@ -1,6 +1,6 @@
 # A.P.C. durable synchronization recovery
 
-Status: **transport-independent crash-recovery record, protected durable record store, foreground transport gate and first session coordinator implemented; Android power-loss behavior and the final portable/local encoding are not frozen**.
+Status: **transport-independent crash-recovery record, protected durable record store, foreground transport gate, session coordinator and stale-outbox rebase transition implemented; Android power-loss behavior and the final portable/local encoding are not frozen**.
 
 This document records the local durability rules that sit between semantic merge state and an opaque transport such as GitHub. It supplements `SYNC.md`, `SYNC_CAPSULES.md`, `DURABILITY.md`, `CORE_IMPLEMENTATION.md` and `SYNC_IMPLEMENTATION.md`.
 
@@ -149,14 +149,14 @@ After restart the durable outbox still exists and the local applied cursor may s
 
 The client must not silently discard the outbox and must not assume the first request failed. It may retry the exact protected bytes; if the expected head is now stale, the conflict becomes a reconciliation signal. The client then fetches from its durable cursor, authenticates and merges the returned protected state, and determines the publication outcome from observable transport state rather than from a lost ACK.
 
-The first executable session coordinator now implements this separation:
+The executable session coordinator implements this separation:
 
 - `publish_staged()` retries the exact durable bytes against the exact staged expected cursor;
 - `fetch_from_durable_cursor()` fetches only from the cursor paired with the current durable local record;
 - `commit_reconciled_outbox()` retires exactly one named publication only while durably committing the reconciled trusted state and observed transport head together;
 - other staged/in-flight publications survive reconciliation of one entry.
 
-An integration test exercises the lost-ACK sequence through the real development filesystem durability backend and the GitHub adapter model: remote acceptance occurs, the local store is closed before ACK handling, recovery reloads the old applied cursor plus the still-present exact outbox bytes, retry yields a stale-head conflict, fetch from the durable cursor rediscovers the accepted object, and only the final durable reconciliation removes the outbox.
+The failure suite now also models the stronger case where the transport mutates remote state and then returns an error as though the response were lost. The durable outbox remains. Retry against the original expected cursor returns a conflict, and fetch from the durable cursor rediscovers the accepted exact object. No success/failure guess is required.
 
 ## 7. Incoming ordering
 
@@ -214,7 +214,7 @@ This remains development recovery machinery rather than the native `.apc` format
 
 ## 9. Foreground-only transport gate
 
-`ForegroundSyncLifecycle` and `ForegroundTransport<T>` now encode the first executable foreground-only rule.
+`ForegroundSyncLifecycle` and `ForegroundTransport<T>` encode the first executable foreground-only rule.
 
 The lifecycle starts backgrounded. A platform binding must explicitly enter foreground before transport calls can begin. After `enter_background()`, new `head`, `fetch_since` and `publish` calls fail locally without touching the wrapped transport.
 
@@ -236,42 +236,67 @@ The gate does not create workers, alarms, timers or a daemon, so background corr
 
 There is an important race boundary: a request can already be in progress when the application backgrounds. The gate deliberately does not invent an outcome after that point. Platform/runtime integration may cancel the underlying request, but such cancellation can leave the external outcome unknown. The durable outbox and reconciliation protocol are the mechanism that makes this safe.
 
+The integration suite now exercises that race directly: the wrapped transport accepts a publication, advances remote state, then the simulated application backgrounds and the response is lost. While backgrounded, retry is blocked locally and never reaches the transport. After foreground resume, the same durable retry discovers a stale-head conflict and fetch rediscovers the accepted bytes.
+
 Therefore the lifecycle rule is:
 
 > Backgrounding prevents new sync I/O; an already-started mutation is recovered as an unknown-outcome operation, never guessed from lifecycle state.
 
 Immediate catch-up on resume remains a platform orchestration responsibility. It should call the same durable-cursor/outbox session path rather than a separate background protocol.
 
-## 10. Implemented crash/restart and failure tests
+## 10. Overlapping publications and stale outbox entries
+
+Multiple pending publications may coexist. Reconciling one entry must not silently rewrite another entry that was prepared earlier.
+
+Suppose both `P1` and `P2` were durably staged against transport cursor `R0`. If `P1` is reconciled and the durable applied cursor advances to `R1`, `P2` still contains its exact original protected bytes and still targets `R0`.
+
+That stale entry must not be mutated in place:
+
+```text
+P2 @ R0
+        |
+R0 -> R1 after reconciliation
+        |
+P2 now stale
+        |
+DO NOT mutate P2 bytes
+DO NOT reuse P2 PublicationId
+        |
+merge/re-export/re-protect against R1
+        |
+fresh PublicationId P3 @ R1
+```
+
+`OutboxRebase` plus `commit_rebased_outbox()` implement the crash-atomic bookkeeping transition for this case. The caller supplies the already-reconciled trusted state, a fresh publication identity and newly protected exact wire objects. The coordinator clones the durable record, retires the named stale entry, prepares the fresh entry against the newer cursor, persists the complete resulting recovery unit once, and only then swaps the caller's in-memory record.
+
+The transition rejects reuse of the stale `PublicationId`. A persistence failure leaves the old publication, old cursor and old trusted state unchanged.
+
+This function deliberately does not decide whether a stale publication should be rebased or is now semantically redundant. That decision belongs above the transport bookkeeping layer after semantic merge.
+
+## 11. Implemented crash/restart and failure tests
 
 The Rust suite tests the durable recovery boundary at several levels.
 
 One filesystem test commits `{old state, R0}`, constructs `{merged state, R1}`, writes and synchronizes the new candidate object, but deliberately does not publish it as the committed root. After closing and reopening the backend, recovery still returns `{old state, R0}`. After a complete durable commit, recovery returns `{merged state, R1}`.
 
-This demonstrates the required pairing at the current filesystem abstraction:
-
-```text
-before committed-root publication:
-    old state + old cursor
-
-after complete durable commit:
-    new state + new cursor
-```
-
 A second test durably stores an outbox, closes/reopens the backend, verifies the exact protected wire bytes survive, applies an incoming cursor while retaining that outbox, closes/reopens again, then reconciles and retires only the named publication. The complete recovery record is protected with the real authenticated-encryption layer before filesystem persistence.
 
-The deterministic session failure matrix now covers four explicit boundaries:
+The deterministic session failure matrix now covers:
 
 1. outbound outbox persistence failure leaves the caller's in-memory record and outbox unchanged;
-2. network failure after durable staging leaves the exact protected retry bytes and durable outbox intact;
-3. inbound merged-state persistence failure cannot advance only the running process's cursor;
-4. reconciliation persistence failure cannot retire the pending outbox or advance the cursor.
+2. ordinary network failure after durable staging leaves the exact protected retry bytes and durable outbox intact;
+3. remote acceptance followed by response loss remains an unknown outcome that is recovered by conflict + refetch;
+4. inbound merged-state persistence failure cannot advance only the running process's cursor;
+5. reconciliation persistence failure cannot retire the pending outbox or advance the cursor;
+6. reconciling one pending publication preserves every other pending publication verbatim;
+7. stale publication rebase requires a fresh `PublicationId` and commits stale-retirement + replacement atomically;
+8. rebase persistence failure preserves the complete previous recovery state;
+9. foreground backgrounding blocks all new transport operations without touching the wrapped transport;
+10. background transition during a remotely accepted in-flight publication is recoverable after resume without guessing the external outcome.
 
-The foreground gate tests additionally prove that all three transport operations are blocked before foreground entry, blocked again after backgrounding, and do not touch the wrapped transport while blocked.
+The filesystem/GitHub lost-ACK integration test additionally combines the protected record store, session coordinator and GitHub CAS-like adapter and verifies restart/retry/reconciliation through the development durable backend.
 
-The lost-ACK filesystem/GitHub integration test combines the protected record store, session coordinator and GitHub CAS-like adapter and verifies restart/retry/reconciliation without guessing transport outcome.
-
-## 11. What this does not yet prove
+## 12. What this does not yet prove
 
 The current tests establish crash-consistent behavior at the Rust durability contract and Unix development backend. They do **not** yet prove actual handset power-loss behavior.
 
@@ -289,7 +314,7 @@ In particular:
 
 The implementation must preserve these seams rather than treating the development recovery record as the native `.apc` format.
 
-## 12. Android validation path
+## 13. Android validation path
 
 Once the first Android binding exists, the same state machine should be exercised through ADB rather than by manual UI testing.
 
@@ -317,13 +342,13 @@ eventual controlled device power-cycle tests
 
 The test oracle should inspect durable state, cursor and outbox rather than merely checking that the application opens.
 
-## 13. Immediate next implementation work
+## 14. Immediate next implementation work
 
 The next slice should:
 
 1. give the GitHub adapter an explicit production reversible conversion between `GitHubCommitOid` and local opaque `TransportCursor` bytes without introducing ordering semantics;
-2. extend deterministic failure injection to remote-accept/response-loss, fetch failure, overlapping pending publications and reconciliation of one publication while another remains in flight;
-3. define the narrow finalization-to-sync preparation seam so exposure bookkeeping is constructed by trusted semantic code rather than passed as an unstructured byte image by application glue;
+2. define the narrow finalization-to-sync preparation seam so exposure bookkeeping is constructed by trusted semantic code rather than passed as an unstructured byte image by application glue;
+3. add fetch/merge failure injection around stale-outbox rebase and chains of several concurrently pending publications;
 4. add a platform cancellation bridge for already-running foreground HTTP operations while preserving unknown-outcome recovery through the durable outbox;
 5. make foreground resume trigger immediate durable-cursor catch-up/reconciliation through the same session path;
 6. later reproduce the same matrix on Android through ADB.
