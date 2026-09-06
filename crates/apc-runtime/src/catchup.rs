@@ -1,4 +1,6 @@
-use apc_core::{ContinuumId, CoreError, LocalScalarDomain, LocalScalarSnapshot, RevisionId, ScalarRevision};
+use apc_core::{
+    ContinuumId, CoreError, LocalScalarDomain, LocalScalarSnapshot, RevisionId, ScalarRevision,
+};
 use apc_crypto::ContentKey;
 use apc_sync::{
     commit_received, fetch_from_durable_cursor, DomainKey, DurableSyncRecord, FetchOutcome,
@@ -114,9 +116,7 @@ where
                     .map_err(ScalarCatchUpError::TrustedState)?;
                 commit_received(record, store, cursor_codec, trusted_state, &head)
                     .map_err(ScalarCatchUpError::Commit)?;
-                return Ok(ScalarCatchUpOutcome::CursorAdvancedWithoutSemanticObjects {
-                    head,
-                });
+                return Ok(ScalarCatchUpOutcome::CursorAdvancedWithoutSemanticObjects { head });
             }
 
             let object_count = objects.len();
@@ -132,9 +132,7 @@ where
 
                 combined_remote = Some(match combined_remote {
                     None => decoded,
-                    Some(current) => current
-                        .merge(&decoded)
-                        .map_err(ScalarCatchUpError::Core)?,
+                    Some(current) => current.merge(&decoded).map_err(ScalarCatchUpError::Core)?,
                 });
             }
 
@@ -145,11 +143,7 @@ where
                 store,
                 trusted_codec,
                 cursor_codec,
-                ReceivedScalarState::new(
-                    &remote,
-                    spec.pre_observation_revision_id,
-                    &head,
-                ),
+                ReceivedScalarState::new(&remote, spec.pre_observation_revision_id, &head),
             )
             .map_err(ScalarCatchUpError::Receive)?;
 
@@ -373,16 +367,15 @@ mod tests {
         };
         assert_eq!(head, Revision(2));
         assert_eq!(object_count, 1);
-        assert_eq!(
-            sealed_local.unwrap().parents,
-            BTreeSet::from([rid(100)])
-        );
+        assert_eq!(sealed_local.unwrap().parents, BTreeSet::from([rid(100)]));
         assert_eq!(
             domain.causal().frontier_ids(),
             BTreeSet::from([rid(200), rid(900)])
         );
         assert_eq!(
-            cursor_codec.decode(record.applied_cursor().unwrap()).unwrap(),
+            cursor_codec
+                .decode(record.applied_cursor().unwrap())
+                .unwrap(),
             Revision(2)
         );
         assert_eq!(transport.inner().fetch_calls, 1);
@@ -421,15 +414,15 @@ mod tests {
 
         assert_eq!(
             outcome,
-            ScalarCatchUpOutcome::CursorAdvancedWithoutSemanticObjects {
-                head: Revision(2)
-            }
+            ScalarCatchUpOutcome::CursorAdvancedWithoutSemanticObjects { head: Revision(2) }
         );
         assert_eq!(domain, before_domain);
         assert!(domain.pending().is_some());
         assert!(domain.causal().revision(rid(200)).is_none());
         assert_eq!(
-            cursor_codec.decode(record.applied_cursor().unwrap()).unwrap(),
+            cursor_codec
+                .decode(record.applied_cursor().unwrap())
+                .unwrap(),
             Revision(2)
         );
     }
