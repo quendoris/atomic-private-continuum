@@ -50,13 +50,7 @@ pub enum ScalarBatchResumeError<TransportError, TrustedError, StoreError, Cursor
     Reconcile(BatchCommitError<StoreError, CursorError>),
 }
 
-pub type ScalarBatchResumeResult<
-    R,
-    TransportError,
-    TrustedError,
-    StoreError,
-    CursorError,
-> = Result<
+pub type ScalarBatchResumeResult<R, TransportError, TrustedError, StoreError, CursorError> = Result<
     ScalarBatchResumeReport<R>,
     ScalarBatchResumeError<TransportError, TrustedError, StoreError, CursorError>,
 >;
@@ -251,13 +245,10 @@ mod tests {
     use apc_core::id::LOGICAL_ID_BYTES;
     use apc_core::{AtomId, ContinuumId, RevisionId, ScalarRegister, WorkingEpochId};
     use apc_crypto::ContentKey;
-    use apc_sync::{
-        stage_outbound, DomainKey, FetchOutcome, SyncRecordStore, TransportCursor,
-    };
+    use apc_sync::{stage_outbound, DomainKey, FetchOutcome, SyncRecordStore, TransportCursor};
 
     use crate::{
-        prepare_scalar_handoff, stage_prepared_scalar_handoff,
-        DevelopmentScalarTrustedStateCodec,
+        prepare_scalar_handoff, stage_prepared_scalar_handoff, DevelopmentScalarTrustedStateCodec,
     };
 
     use super::*;
@@ -597,10 +588,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            report.observed_reconciled,
-            BTreeSet::from([pid(1), pid(2)])
-        );
+        assert_eq!(report.observed_reconciled, BTreeSet::from([pid(1), pid(2)]));
         assert_eq!(report.action, ScalarBatchResumeAction::None);
         assert_eq!(transport.fetch_calls, 1);
         assert_eq!(transport.publish_calls, 0);
