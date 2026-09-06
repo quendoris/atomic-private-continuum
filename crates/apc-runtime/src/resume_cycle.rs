@@ -58,10 +58,7 @@ where
         catch_up_spec,
     )?;
 
-    if !matches!(
-        &initial.outbox,
-        ScalarResumeOutboxOutcome::Conflict { .. }
-    ) {
+    if !matches!(&initial.outbox, ScalarResumeOutboxOutcome::Conflict { .. }) {
         return Ok(ScalarResumeCycleReport {
             initial,
             post_conflict: None,
@@ -92,8 +89,8 @@ mod tests {
     use apc_sync::{DomainKey, FetchOutcome, PublicationId, PublishOutcome, TransportCursor};
 
     use crate::{
-        prepare_scalar_handoff, stage_prepared_scalar_handoff,
-        DevelopmentScalarTrustedStateCodec, ScalarCatchUpOutcome,
+        prepare_scalar_handoff, stage_prepared_scalar_handoff, DevelopmentScalarTrustedStateCodec,
+        ScalarCatchUpOutcome,
     };
 
     use super::*;
