@@ -154,7 +154,9 @@ mod tests {
             let next = self.next.get() + 1;
             self.next.set(next);
             let token = next.to_be_bytes().to_vec();
-            self.snapshots.borrow_mut().insert(token.clone(), state.clone());
+            self.snapshots
+                .borrow_mut()
+                .insert(token.clone(), state.clone());
             Ok(token)
         }
 
@@ -281,9 +283,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ScalarHandoffStageError::Sync(PersistTransitionError::Store(
-                "durability failure"
-            ))
+            ScalarHandoffStageError::Sync(PersistTransitionError::Store("durability failure"))
         ));
         assert_eq!(domain, before_domain);
         assert_eq!(record, before_record);
