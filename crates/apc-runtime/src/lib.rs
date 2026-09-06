@@ -10,6 +10,7 @@ mod catchup;
 mod publication;
 mod receive;
 mod resume;
+mod resume_batch;
 mod resume_cycle;
 mod trusted_state;
 
@@ -31,6 +32,10 @@ pub use receive::{
 };
 pub use resume::{
     resume_single_scalar_domain, ScalarResumeError, ScalarResumeOutboxOutcome, ScalarResumeReport,
+};
+pub use resume_batch::{
+    resume_scalar_outbox_set, ScalarBatchResumeAction, ScalarBatchResumeError,
+    ScalarBatchResumeReport, ScalarBatchResumeResult,
 };
 pub use resume_cycle::{resume_single_scalar_domain_bounded, ScalarResumeCycleReport};
 pub use trusted_state::{
