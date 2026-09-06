@@ -151,14 +151,20 @@ impl core::fmt::Display for MultiScalarTrustedStateCodecError {
         match self {
             Self::InvalidMagic => write!(f, "invalid multi-scalar local recovery magic"),
             Self::UnsupportedVersion { version } => {
-                write!(f, "unsupported multi-scalar local recovery version {version}")
+                write!(
+                    f,
+                    "unsupported multi-scalar local recovery version {version}"
+                )
             }
             Self::UnexpectedEof => write!(f, "truncated multi-scalar local recovery state"),
             Self::LengthOverflow => {
                 write!(f, "multi-scalar local recovery length overflows limits")
             }
             Self::TrailingBytes => {
-                write!(f, "multi-scalar local recovery state contains trailing bytes")
+                write!(
+                    f,
+                    "multi-scalar local recovery state contains trailing bytes"
+                )
             }
             Self::DuplicateDomain => write!(f, "multi-scalar local recovery repeats a domain"),
             Self::Domain(error) => write!(f, "invalid local recovery domain key: {error}"),
@@ -252,18 +258,14 @@ pub fn decode_multi_scalar_recovery_state(
     Ok(LocalScalarRecoveryState { domains })
 }
 
-fn write_bytes(
-    out: &mut Vec<u8>,
-    bytes: &[u8],
-) -> Result<(), MultiScalarTrustedStateCodecError> {
+fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), MultiScalarTrustedStateCodecError> {
     write_len(out, bytes.len())?;
     out.extend_from_slice(bytes);
     Ok(())
 }
 
 fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), MultiScalarTrustedStateCodecError> {
-    let len =
-        u64::try_from(len).map_err(|_| MultiScalarTrustedStateCodecError::LengthOverflow)?;
+    let len = u64::try_from(len).map_err(|_| MultiScalarTrustedStateCodecError::LengthOverflow)?;
     out.extend_from_slice(&len.to_be_bytes());
     Ok(())
 }
@@ -282,10 +284,7 @@ impl<'a> Reader<'a> {
         self.position == self.bytes.len()
     }
 
-    fn read_exact(
-        &mut self,
-        len: usize,
-    ) -> Result<&'a [u8], MultiScalarTrustedStateCodecError> {
+    fn read_exact(&mut self, len: usize) -> Result<&'a [u8], MultiScalarTrustedStateCodecError> {
         let end = self
             .position
             .checked_add(len)
@@ -470,8 +469,10 @@ mod tests {
         let title_snapshot = base_snapshot(200, "title");
 
         let mut left = LocalScalarRecoveryState::new();
-        left.insert_new(body.clone(), body_snapshot.clone()).unwrap();
-        left.insert_new(title.clone(), title_snapshot.clone()).unwrap();
+        left.insert_new(body.clone(), body_snapshot.clone())
+            .unwrap();
+        left.insert_new(title.clone(), title_snapshot.clone())
+            .unwrap();
 
         let mut right = LocalScalarRecoveryState::new();
         right.insert_new(title, title_snapshot).unwrap();
