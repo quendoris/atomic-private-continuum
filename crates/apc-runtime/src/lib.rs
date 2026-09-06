@@ -7,6 +7,7 @@
 //! becoming portable format semantics.
 
 mod catchup;
+mod catchup_set;
 mod publication;
 mod receive;
 mod receive_set;
@@ -23,6 +24,10 @@ use apc_transport_github::GitHubCommitOid;
 pub use catchup::{
     catch_up_single_scalar_domain, ScalarCatchUpError, ScalarCatchUpOutcome, ScalarCatchUpResult,
     ScalarCatchUpSpec,
+};
+pub use catchup_set::{
+    catch_up_scalar_recovery_state, ScalarRecoveryCatchUpError, ScalarRecoveryCatchUpOutcome,
+    ScalarRecoveryCatchUpResult, ScalarRecoveryCatchUpSpec,
 };
 pub use publication::{
     prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
