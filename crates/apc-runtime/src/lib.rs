@@ -14,6 +14,7 @@ mod resume_batch;
 mod resume_batch_cycle;
 mod resume_cycle;
 mod trusted_state;
+mod trusted_state_set;
 
 use apc_sync::{TransportCursor, TransportCursorCodec};
 use apc_transport_github::GitHubCommitOid;
@@ -44,6 +45,11 @@ pub use resume_cycle::{resume_single_scalar_domain_bounded, ScalarResumeCycleRep
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
     TrustedStateCodecError,
+};
+pub use trusted_state_set::{
+    decode_multi_scalar_recovery_state, encode_multi_scalar_recovery_state,
+    DevelopmentMultiScalarTrustedStateCodec, LocalScalarRecoveryState,
+    LocalScalarRecoveryStateError, MultiScalarTrustedStateCodecError,
 };
 
 /// Reversible local crash-recovery codec for GitHub transport revisions.
