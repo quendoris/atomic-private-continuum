@@ -9,10 +9,9 @@ use apc_core::{
 };
 use apc_crypto::ContentKey;
 use apc_runtime::{
-    prepare_recovery_handoff, resume_scalar_recovery_outbox_set,
-    stage_prepared_recovery_handoff, DevelopmentMultiScalarTrustedStateCodec,
-    LocalScalarRecoveryState, ScalarRecoveryResumeAction, ScalarRecoveryResumeSpec,
-    TrustedStateCodec,
+    prepare_recovery_handoff, resume_scalar_recovery_outbox_set, stage_prepared_recovery_handoff,
+    DevelopmentMultiScalarTrustedStateCodec, LocalScalarRecoveryState, ScalarRecoveryResumeAction,
+    ScalarRecoveryResumeSpec, TrustedStateCodec,
 };
 use apc_storage_fs::UnixFsDurabilityBackend;
 use apc_sync::{
@@ -201,14 +200,8 @@ fn accepted_multi_domain_publication_is_reconciled_after_encrypted_restart_witho
     .unwrap();
     let accepted_objects = prepared.objects().to_vec();
 
-    stage_prepared_recovery_handoff(
-        &mut recovery,
-        &mut record,
-        &mut store,
-        &codec,
-        prepared,
-    )
-    .unwrap();
+    stage_prepared_recovery_handoff(&mut recovery, &mut record, &mut store, &codec, prepared)
+        .unwrap();
     assert!(record.outbox().contains_key(&pid(7)));
 
     // The remote side has accepted these exact durable bytes at R2, but the
