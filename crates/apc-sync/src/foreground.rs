@@ -187,7 +187,10 @@ mod tests {
         let mut transport = lifecycle.guard(CountingTransport::default());
 
         assert!(!lifecycle.is_foreground());
-        assert_eq!(transport.head(), Err(ForegroundTransportError::Backgrounded));
+        assert_eq!(
+            transport.head(),
+            Err(ForegroundTransportError::Backgrounded)
+        );
         assert_eq!(
             transport.fetch_since(None),
             Err(ForegroundTransportError::Backgrounded)
