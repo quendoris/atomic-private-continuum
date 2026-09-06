@@ -86,6 +86,10 @@ pub type ScalarCatchUpResult<R, TransportError, TrustedError, StoreError, Cursor
 /// merged before a single semantic observation boundary is crossed. Dirty local
 /// work is therefore sealed once against the frontier it actually observed, not
 /// once per fetched transport object.
+///
+/// The typed result intentionally preserves transport, trusted-state, durability
+/// and cursor failures as distinct error channels at this composition seam.
+#[allow(clippy::type_complexity)]
 pub fn catch_up_single_scalar_domain<T, S, TC, CC>(
     domain: &mut LocalScalarDomain<Vec<u8>>,
     record: &mut DurableSyncRecord,
