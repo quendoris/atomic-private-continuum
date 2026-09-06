@@ -200,7 +200,12 @@ mod tests {
 
     fn domain() -> LocalScalarDomain<Vec<u8>> {
         let mut register = ScalarRegister::new();
-        register.assign(apc_core::RevisionId::from_bytes(bytes(100)), b"base".to_vec()).unwrap();
+        register
+            .assign(
+                apc_core::RevisionId::from_bytes(bytes(100)),
+                b"base".to_vec(),
+            )
+            .unwrap();
         LocalScalarDomain::from_causal(register).unwrap()
     }
 
