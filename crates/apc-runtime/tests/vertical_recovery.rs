@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,13 +10,14 @@ use apc_core::{
 };
 use apc_crypto::ContentKey;
 use apc_runtime::{
-    prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
-    DevelopmentScalarTrustedStateCodec, GitHubCursorCodec, TrustedStateCodec,
+    commit_received_scalar_domain, decode_single_scalar_domain_object, prepare_scalar_handoff,
+    recover_scalar_domain, stage_prepared_scalar_handoff, DevelopmentScalarTrustedStateCodec,
+    GitHubCursorCodec, ReceivedScalarState, TrustedStateCodec,
 };
 use apc_storage_fs::UnixFsDurabilityBackend;
 use apc_sync::{
     decode_protected_sync_part, unprotect_scalar_part, DomainKey, DurableSyncRecord,
-    ProtectedSyncRecordStore, PublicationId, TransportCursorCodec,
+    ProtectedSyncRecordStore, PublicationId, SyncRecordStore, TransportCursorCodec,
 };
 use apc_transport_github::GitHubCommitOid;
 
@@ -92,6 +94,33 @@ fn prepared_domain() -> LocalScalarDomain<Vec<u8>> {
         .unwrap();
     domain
         .update_pending(b"pending-latest-secret".to_vec())
+        .unwrap();
+    domain
+}
+
+fn shared_base() -> ScalarRegister<Vec<u8>> {
+    let mut causal = ScalarRegister::new();
+    causal.assign(rid(100), b"shared-base".to_vec()).unwrap();
+    causal
+}
+
+fn inbound_sender() -> LocalScalarDomain<Vec<u8>> {
+    let mut domain = LocalScalarDomain::from_causal(shared_base()).unwrap();
+    domain
+        .begin_epoch(wid(90), b"remote-observed-value".to_vec())
+        .unwrap();
+    domain.seal_local(rid(900)).unwrap();
+    domain.finalize(rid(900)).unwrap();
+    domain
+}
+
+fn dirty_inbound_receiver() -> LocalScalarDomain<Vec<u8>> {
+    let mut domain = LocalScalarDomain::from_causal(shared_base()).unwrap();
+    domain
+        .begin_epoch(wid(20), b"local-draft-before-remote".to_vec())
+        .unwrap();
+    domain
+        .update_pending(b"local-draft-latest-sensitive".to_vec())
         .unwrap();
     domain
 }
@@ -205,5 +234,121 @@ fn semantic_exposure_survives_real_sync_crypto_filesystem_restart_and_exact_outb
     assert_eq!(
         published.materialized().map(Vec::as_slice),
         Some(b"local-finalized".as_slice())
+    );
+}
+
+#[test]
+fn dirty_remote_observation_survives_real_crypto_filesystem_restart_with_true_concurrency() {
+    let directory = TestDir::new();
+    let codec = DevelopmentScalarTrustedStateCodec;
+    let cursor_codec = GitHubCursorCodec;
+    let old_head = GitHubCommitOid::new("1111111111111111111111111111111111111111").unwrap();
+    let new_head = GitHubCommitOid::new("2222222222222222222222222222222222222222").unwrap();
+    let old_cursor = cursor_codec.encode(&old_head).unwrap();
+
+    let semantic_key = DomainKey::new(atom(2), b"title".to_vec()).unwrap();
+    let publication_key = ContentKey::from_bytes(PUBLICATION_KEY);
+    let sender = inbound_sender();
+    let prepared_remote = prepare_scalar_handoff(
+        &sender,
+        semantic_key.clone(),
+        cid(2),
+        pid(2),
+        &publication_key,
+        [rid(900)],
+    )
+    .unwrap();
+    let remote = decode_single_scalar_domain_object(
+        &publication_key,
+        cid(2),
+        &semantic_key,
+        &prepared_remote.publication().objects()[0],
+    )
+    .unwrap();
+
+    let mut receiver = dirty_inbound_receiver();
+    let initial_trusted_state = codec.encode(&receiver.snapshot()).unwrap();
+    let mut record = DurableSyncRecord::new(initial_trusted_state, Some(old_cursor));
+
+    let backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+    let mut store = ProtectedSyncRecordStore::new(
+        backend,
+        ContentKey::from_bytes(STORE_KEY),
+        STORE_CONTEXT.to_vec(),
+    )
+    .unwrap();
+    store.persist(&record).unwrap();
+
+    let sealed = commit_received_scalar_domain(
+        &mut receiver,
+        &mut record,
+        &mut store,
+        &codec,
+        &cursor_codec,
+        ReceivedScalarState::new(&remote, Some(rid(200)), &new_head),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(sealed.parents, BTreeSet::from([rid(100)]));
+    assert_eq!(
+        receiver.causal().frontier_ids(),
+        BTreeSet::from([rid(200), rid(900)])
+    );
+    assert!(!receiver.causal().is_ancestor(rid(200), rid(900)));
+    assert!(!receiver.causal().is_ancestor(rid(900), rid(200)));
+    assert!(receiver
+        .finalization()
+        .local_revision_ids()
+        .contains(&rid(200)));
+    assert!(receiver.pending().is_none());
+    assert!(record.outbox().is_empty());
+    assert_eq!(
+        cursor_codec.decode(record.applied_cursor().unwrap()).unwrap(),
+        new_head
+    );
+
+    let raw_committed = store.backend().load_committed().unwrap().unwrap();
+    assert!(!raw_committed
+        .windows(b"local-draft-latest-sensitive".len())
+        .any(|window| window == b"local-draft-latest-sensitive"));
+    assert!(!raw_committed
+        .windows(b"remote-observed-value".len())
+        .any(|window| window == b"remote-observed-value"));
+    assert!(!raw_committed
+        .windows(b"APCLREC1".len())
+        .any(|window| window == b"APCLREC1"));
+
+    let expected = receiver.clone();
+    drop(store);
+    drop(record);
+    drop(receiver);
+
+    let reopened_backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+    let reopened_store = ProtectedSyncRecordStore::new(
+        reopened_backend,
+        ContentKey::from_bytes(STORE_KEY),
+        STORE_CONTEXT.to_vec(),
+    )
+    .unwrap();
+    let recovered_record = reopened_store.load_committed().unwrap().unwrap();
+    let recovered = recover_scalar_domain(&recovered_record, &codec).unwrap();
+
+    assert_eq!(recovered, expected);
+    assert_eq!(
+        recovered.causal().frontier_ids(),
+        BTreeSet::from([rid(200), rid(900)])
+    );
+    assert_eq!(
+        recovered.causal().revision(rid(200)).unwrap().parents,
+        BTreeSet::from([rid(100)])
+    );
+    assert!(!recovered.causal().is_ancestor(rid(200), rid(900)));
+    assert!(!recovered.causal().is_ancestor(rid(900), rid(200)));
+    assert_eq!(
+        cursor_codec
+            .decode(recovered_record.applied_cursor().unwrap())
+            .unwrap(),
+        new_head
     );
 }
