@@ -49,12 +49,21 @@ pub enum RecoveryPublicationPrepareError {
 impl core::fmt::Display for RecoveryPublicationPrepareError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::EmptySelection => write!(f, "multi-domain publication must select at least one domain"),
+            Self::EmptySelection => write!(
+                f,
+                "multi-domain publication must select at least one domain"
+            ),
             Self::EmptyRevisionSet { domain_key } => {
-                write!(f, "publication domain {domain_key:?} has no selected revisions")
+                write!(
+                    f,
+                    "publication domain {domain_key:?} has no selected revisions"
+                )
             }
             Self::MissingDomain { domain_key } => {
-                write!(f, "publication references missing local domain {domain_key:?}")
+                write!(
+                    f,
+                    "publication references missing local domain {domain_key:?}"
+                )
             }
             Self::Core(error) => write!(f, "multi-domain publication semantic error: {error}"),
             Self::Protection(error) => {
@@ -137,28 +146,27 @@ pub fn prepare_recovery_handoff(
             });
         }
 
-        let domain = recovery
-            .restore_domain(domain_key)?
-            .ok_or_else(|| RecoveryPublicationPrepareError::MissingDomain {
+        let domain = recovery.restore_domain(domain_key)?.ok_or_else(|| {
+            RecoveryPublicationPrepareError::MissingDomain {
                 domain_key: domain_key.clone(),
-            })?;
+            }
+        })?;
 
         let mut eligibility = domain.clone();
         eligibility.handoff(selected.iter().copied())?;
 
         let closure = dependency_closure(domain.causal(), selected)?;
-        let revisions = closure
-            .iter()
-            .map(|revision_id| {
-                domain
-                    .causal()
-                    .revision(*revision_id)
-                    .cloned()
-                    .ok_or(CoreError::UnknownRevision {
-                        revision_id: *revision_id,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let revisions =
+            closure
+                .iter()
+                .map(|revision_id| {
+                    domain.causal().revision(*revision_id).cloned().ok_or(
+                        CoreError::UnknownRevision {
+                            revision_id: *revision_id,
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         let register = ScalarRegister::from_revisions(revisions)?;
         projected_domains.insert(domain_key.clone(), register);
     }
@@ -344,18 +352,29 @@ mod tests {
         ]);
         let key = ContentKey::from_bytes([0xE1; 32]);
 
-        let prepared = prepare_recovery_handoff(&recovery, cid(1), pid(1), &key, selections).unwrap();
+        let prepared =
+            prepare_recovery_handoff(&recovery, cid(1), pid(1), &key, selections).unwrap();
         assert_eq!(prepared.objects().len(), 1);
 
         let protected = decode_protected_sync_part(&prepared.objects()[0]).unwrap();
         let projection = unprotect_scalar_part(&key, cid(1), &protected).unwrap();
         assert_eq!(projection.len(), 2);
         assert_eq!(
-            projection.get(&body_key).unwrap().revisions().map(|r| r.id).collect(),
+            projection
+                .get(&body_key)
+                .unwrap()
+                .revisions()
+                .map(|r| r.id)
+                .collect(),
             BTreeSet::from([rid(100), rid(200)])
         );
         assert_eq!(
-            projection.get(&title_key).unwrap().revisions().map(|r| r.id).collect(),
+            projection
+                .get(&title_key)
+                .unwrap()
+                .revisions()
+                .map(|r| r.id)
+                .collect(),
             BTreeSet::from([rid(300), rid(400)])
         );
     }
@@ -391,14 +410,8 @@ mod tests {
         .unwrap();
         let exact_objects = prepared.objects().to_vec();
 
-        stage_prepared_recovery_handoff(
-            &mut recovery,
-            &mut record,
-            &mut store,
-            &codec,
-            prepared,
-        )
-        .unwrap();
+        stage_prepared_recovery_handoff(&mut recovery, &mut record, &mut store, &codec, prepared)
+            .unwrap();
 
         for (domain_key, revision_id) in [(&body_key, rid(200)), (&title_key, rid(400))] {
             let restored = recovery.restore_domain(domain_key).unwrap().unwrap();
