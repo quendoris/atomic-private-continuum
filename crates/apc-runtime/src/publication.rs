@@ -80,7 +80,9 @@ pub enum ScalarPublicationPrepareError {
 impl core::fmt::Display for ScalarPublicationPrepareError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::EmptyRevisionSet => write!(f, "scalar publication must name at least one revision"),
+            Self::EmptyRevisionSet => {
+                write!(f, "scalar publication must name at least one revision")
+            }
             Self::Core(error) => write!(f, "scalar publication semantic error: {error}"),
             Self::Protection(error) => write!(f, "scalar publication protection error: {error}"),
             Self::Wire(error) => write!(f, "scalar publication wire error: {error}"),
@@ -180,14 +182,7 @@ where
     let projection: ScalarSyncProjection =
         SyncProjection::from_domains(BTreeMap::from([(domain_key, register)]));
 
-    let part = protect_scalar_part(
-        key,
-        continuum_id,
-        publication_id,
-        0,
-        1,
-        &projection,
-    )?;
+    let part = protect_scalar_part(key, continuum_id, publication_id, 0, 1, &projection)?;
     let wire = encode_protected_sync_part(&part)?;
 
     Ok(PreparedScalarHandoff {
@@ -432,19 +427,15 @@ mod tests {
 
         let mut remote = ScalarRegister::new();
         remote.assign(rid(100), b"base".to_vec()).unwrap();
-        remote.assign(rid(900), b"unrelated-remote".to_vec()).unwrap();
+        remote
+            .assign(rid(900), b"unrelated-remote".to_vec())
+            .unwrap();
         domain.observe_remote(&remote, None).unwrap();
 
         let key_name = domain_key();
-        let prepared = prepare_scalar_handoff(
-            &domain,
-            key_name.clone(),
-            cid(7),
-            pid(8),
-            &key,
-            [rid(200)],
-        )
-        .unwrap();
+        let prepared =
+            prepare_scalar_handoff(&domain, key_name.clone(), cid(7), pid(8), &key, [rid(200)])
+                .unwrap();
 
         assert_eq!(prepared.revision_ids(), &BTreeSet::from([rid(200)]));
         assert_eq!(prepared.publication().objects().len(), 1);
@@ -464,15 +455,8 @@ mod tests {
         let key = ContentKey::from_bytes([0x62; 32]);
         let domain = prepared_bytes_local(false);
 
-        let error = prepare_scalar_handoff(
-            &domain,
-            domain_key(),
-            cid(7),
-            pid(9),
-            &key,
-            [rid(200)],
-        )
-        .unwrap_err();
+        let error = prepare_scalar_handoff(&domain, domain_key(), cid(7), pid(9), &key, [rid(200)])
+            .unwrap_err();
 
         assert!(matches!(
             error,
