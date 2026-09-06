@@ -44,12 +44,20 @@ impl core::fmt::Display for TrustedStateCodecError {
             Self::UnexpectedEof => write!(f, "truncated local scalar recovery state"),
             Self::LengthOverflow => write!(f, "local scalar recovery length overflows limits"),
             Self::TrailingBytes => write!(f, "local scalar recovery state contains trailing bytes"),
-            Self::InvalidBoolean => write!(f, "local scalar recovery state contains invalid boolean"),
+            Self::InvalidBoolean => {
+                write!(f, "local scalar recovery state contains invalid boolean")
+            }
             Self::DuplicateRevisionInSet => {
-                write!(f, "local scalar recovery state repeats a revision ID in a set")
+                write!(
+                    f,
+                    "local scalar recovery state repeats a revision ID in a set"
+                )
             }
             Self::DuplicateFinalizedStatement => {
-                write!(f, "local scalar recovery state repeats a finalized revision")
+                write!(
+                    f,
+                    "local scalar recovery state repeats a finalized revision"
+                )
             }
             Self::Core(error) => write!(f, "invalid local scalar semantic state: {error}"),
         }
@@ -360,8 +368,9 @@ mod tests {
         domain.update_pending(b"latest-draft".to_vec()).unwrap();
         let snapshot = domain.snapshot();
 
-        let decoded = decode_local_scalar_snapshot(&encode_local_scalar_snapshot(&snapshot).unwrap())
-            .unwrap();
+        let decoded =
+            decode_local_scalar_snapshot(&encode_local_scalar_snapshot(&snapshot).unwrap())
+                .unwrap();
         assert_eq!(decoded, snapshot);
         assert_eq!(decoded.working.pending.unwrap().id, wid(9));
     }
@@ -408,7 +417,9 @@ mod tests {
 
         assert!(matches!(
             encode_local_scalar_snapshot(&snapshot),
-            Err(TrustedStateCodecError::Core(CoreError::InvalidWorkingSnapshot))
+            Err(TrustedStateCodecError::Core(
+                CoreError::InvalidWorkingSnapshot
+            ))
         ));
     }
 }
