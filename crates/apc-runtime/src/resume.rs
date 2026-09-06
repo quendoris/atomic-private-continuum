@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use apc_core::{LocalScalarDomain, LocalScalarSnapshot};
 use apc_sync::{
     commit_reconciled_outbox, publish_staged, DurableSyncRecord, OpaqueTransport, PublicationId,
@@ -5,8 +7,8 @@ use apc_sync::{
 };
 
 use crate::{
-    catch_up_single_scalar_domain, ScalarCatchUpError, ScalarCatchUpOutcome, ScalarCatchUpSpec,
-    TrustedStateCodec,
+    catch_up_single_scalar_domain, decode_single_scalar_domain_object, ScalarCatchUpError,
+    ScalarCatchUpOutcome, ScalarCatchUpSpec, ScalarObjectDecodeError, TrustedStateCodec,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,6 +17,13 @@ pub enum ScalarResumeOutboxOutcome<R> {
     BlockedByBaseline,
     NeedsRebase {
         publication_id: PublicationId,
+    },
+    /// Catch-up authenticated remote scalar state that already contains the full
+    /// causal closure carried by the stale pending publication. The publication
+    /// is therefore reconciled without sending another transport mutation.
+    ObservedAndReconciled {
+        publication_id: PublicationId,
+        head: R,
     },
     PublishedAndReconciled {
         publication_id: PublicationId,
@@ -36,6 +45,7 @@ pub struct ScalarResumeReport<R> {
 pub enum ScalarResumeError<TransportError, TrustedError, StoreError, CursorError> {
     MultiplePendingOutboxUnsupported { count: usize },
     CatchUp(ScalarCatchUpError<TransportError, TrustedError, StoreError, CursorError>),
+    PendingDecode(ScalarObjectDecodeError),
     Publish(SessionIoError<TransportError, CursorError>),
     Reconcile(SessionCommitError<StoreError, CursorError>),
 }
@@ -48,14 +58,24 @@ pub enum ScalarResumeError<TransportError, TrustedError, StoreError, CursorError
 /// 1. fetch from the cursor paired with durable trusted state;
 /// 2. authenticate/merge and durably advance that cursor if needed;
 /// 3. inspect the still-durable outbox against the resulting cursor;
-/// 4. retry exact staged bytes only when their expected cursor is still current;
-/// 5. on a positive transport acknowledgement, retire the outbox only through a
+/// 4. if catch-up proves that a stale pending scalar publication is already
+///    represented in authenticated remote causal state, retire it durably without
+///    another transport mutation;
+/// 5. otherwise retry exact staged bytes only when their expected cursor is still
+///    current;
+/// 6. on a positive transport acknowledgement, retire the outbox only through a
 ///    second durability barrier paired with the acknowledged head.
 ///
-/// If catch-up makes the staged publication stale, this function does not mutate
-/// or re-encrypt it. It reports `NeedsRebase`; the semantic layer must decide
-/// whether the contribution is redundant or must be re-exported under a fresh
-/// `PublicationId`.
+/// The lost-ack proof in step 4 is intentionally specific to the current
+/// single-part pre-format scalar publication: every revision identity carried by
+/// the pending dependency closure must also have arrived in authenticated remote
+/// state during this exact catch-up pass. Merely finding those identities in the
+/// already-local domain is not evidence of remote observation.
+///
+/// If catch-up makes a staged publication stale without that proof, this function
+/// does not mutate or re-encrypt it. It reports `NeedsRebase`; the semantic layer
+/// must decide whether the contribution is redundant or must be re-exported under
+/// a fresh `PublicationId`.
 ///
 /// More than one pending publication is intentionally rejected before network
 /// I/O in this first slice. Overlapping outbox entries require an explicit
@@ -117,6 +137,47 @@ where
         .get(&publication_id)
         .expect("catch-up preserves pending outbox entries");
     if entry.expected_cursor() != record.applied_cursor() {
+        if let ScalarCatchUpOutcome::Applied {
+            head,
+            observed_revision_ids,
+            ..
+        } = &catch_up
+        {
+            if entry.objects().len() == 1 {
+                let pending = decode_single_scalar_domain_object(
+                    catch_up_spec.key(),
+                    catch_up_spec.continuum_id(),
+                    catch_up_spec.domain_key(),
+                    &entry.objects()[0],
+                )
+                .map_err(ScalarResumeError::PendingDecode)?;
+                let pending_revision_ids: BTreeSet<_> =
+                    pending.revisions().map(|revision| revision.id).collect();
+
+                if pending_revision_ids.is_subset(observed_revision_ids) {
+                    let reconciled_head = head.clone();
+                    let trusted_state = record.trusted_state().to_vec();
+                    commit_reconciled_outbox(
+                        record,
+                        store,
+                        cursor_codec,
+                        publication_id,
+                        trusted_state,
+                        &reconciled_head,
+                    )
+                    .map_err(ScalarResumeError::Reconcile)?;
+
+                    return Ok(ScalarResumeReport {
+                        catch_up,
+                        outbox: ScalarResumeOutboxOutcome::ObservedAndReconciled {
+                            publication_id,
+                            head: reconciled_head,
+                        },
+                    });
+                }
+            }
+        }
+
         return Ok(ScalarResumeReport {
             catch_up,
             outbox: ScalarResumeOutboxOutcome::NeedsRebase { publication_id },
@@ -159,11 +220,14 @@ where
 #[cfg(test)]
 mod tests {
     use apc_core::id::LOGICAL_ID_BYTES;
-    use apc_core::{AtomId, ContinuumId, RevisionId, ScalarRegister};
+    use apc_core::{AtomId, ContinuumId, RevisionId, ScalarRegister, WorkingEpochId};
     use apc_crypto::ContentKey;
     use apc_sync::{stage_outbound, DomainKey, FetchOutcome, SyncRecordStore, TransportCursor};
 
-    use crate::DevelopmentScalarTrustedStateCodec;
+    use crate::{
+        prepare_scalar_handoff, stage_prepared_scalar_handoff,
+        DevelopmentScalarTrustedStateCodec,
+    };
 
     use super::*;
 
@@ -255,6 +319,10 @@ mod tests {
 
     fn rid(value: u64) -> RevisionId {
         RevisionId::from_bytes(bytes(value))
+    }
+
+    fn wid(value: u64) -> WorkingEpochId {
+        WorkingEpochId::from_bytes(bytes(value))
     }
 
     fn pid(value: u64) -> PublicationId {
@@ -399,5 +467,89 @@ mod tests {
                 .unwrap(),
             Revision(2)
         );
+    }
+
+    #[test]
+    fn lost_ack_is_reconciled_from_authenticated_catch_up_without_second_publish() {
+        let trusted_codec = DevelopmentScalarTrustedStateCodec;
+        let cursor_codec = RevisionCodec;
+        let key = ContentKey::from_bytes([0xA3; 32]);
+        let semantic_key = domain_key();
+        let mut domain = domain();
+        domain.begin_epoch(wid(1), b"local-exposed".to_vec()).unwrap();
+        domain.seal_local(rid(200)).unwrap();
+        domain.finalize(rid(200)).unwrap();
+
+        let mut record = DurableSyncRecord::new(
+            trusted_codec.encode(&domain.snapshot()).unwrap(),
+            Some(cursor_codec.encode(&Revision(1)).unwrap()),
+        );
+        let mut store = MemoryStore::default();
+        let prepared = prepare_scalar_handoff(
+            &domain,
+            semantic_key.clone(),
+            cid(1),
+            pid(9),
+            &key,
+            [rid(200)],
+        )
+        .unwrap();
+        let remotely_accepted_objects = prepared.publication().objects().to_vec();
+        stage_prepared_scalar_handoff(
+            &mut domain,
+            &mut record,
+            &mut store,
+            &trusted_codec,
+            prepared,
+        )
+        .unwrap();
+
+        // The transport accepted the exact protected publication and advanced to
+        // R2, but the client died before its acknowledgement could retire pid(9).
+        let mut transport = ResumeTransport {
+            head: Revision(2),
+            fetched_objects: remotely_accepted_objects,
+            fetch_calls: 0,
+            publish_calls: 0,
+        };
+
+        let report = resume_single_scalar_domain(
+            &mut domain,
+            &mut record,
+            &mut store,
+            &trusted_codec,
+            &cursor_codec,
+            &mut transport,
+            ScalarCatchUpSpec::new(&key, cid(1), &semantic_key, None),
+        )
+        .unwrap();
+
+        let ScalarCatchUpOutcome::Applied {
+            head,
+            observed_revision_ids,
+            ..
+        } = &report.catch_up
+        else {
+            panic!("expected authenticated catch-up")
+        };
+        assert_eq!(*head, Revision(2));
+        assert_eq!(observed_revision_ids, &BTreeSet::from([rid(100), rid(200)]));
+        assert_eq!(
+            report.outbox,
+            ScalarResumeOutboxOutcome::ObservedAndReconciled {
+                publication_id: pid(9),
+                head: Revision(2)
+            }
+        );
+        assert!(record.outbox().is_empty());
+        assert_eq!(transport.fetch_calls, 1);
+        assert_eq!(transport.publish_calls, 0);
+        assert_eq!(
+            cursor_codec
+                .decode(record.applied_cursor().unwrap())
+                .unwrap(),
+            Revision(2)
+        );
+        assert_eq!(store.committed.as_ref(), Some(&record));
     }
 }
