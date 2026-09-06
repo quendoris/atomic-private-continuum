@@ -4,8 +4,8 @@ use apc_core::{
 };
 use apc_crypto::ContentKey;
 use apc_sync::{
-    commit_received, decode_protected_sync_part, unprotect_scalar_part, DomainKey, DurableSyncRecord,
-    ProtectedPartCodecError, SessionCommitError, SyncPartError, SyncRecordStore,
+    commit_received, decode_protected_sync_part, unprotect_scalar_part, DomainKey,
+    DurableSyncRecord, ProtectedPartCodecError, SessionCommitError, SyncPartError, SyncRecordStore,
     TransportCursorCodec,
 };
 
@@ -26,13 +26,19 @@ impl core::fmt::Display for ScalarObjectDecodeError {
             Self::Wire(error) => write!(f, "protected scalar wire error: {error}"),
             Self::Protection(error) => write!(f, "protected scalar authentication error: {error}"),
             Self::MultipartUnsupported => {
-                write!(f, "single-object scalar receive path cannot accept multipart state")
+                write!(
+                    f,
+                    "single-object scalar receive path cannot accept multipart state"
+                )
             }
             Self::UnexpectedDomainCount { count } => {
                 write!(f, "single-domain scalar object contains {count} domains")
             }
             Self::MissingExpectedDomain => {
-                write!(f, "protected scalar object does not contain the expected domain")
+                write!(
+                    f,
+                    "protected scalar object does not contain the expected domain"
+                )
             }
         }
     }
@@ -131,14 +137,8 @@ where
         .encode(&candidate.snapshot())
         .map_err(ScalarReceiveCommitError::TrustedState)?;
 
-    commit_received(
-        record,
-        store,
-        cursor_codec,
-        merged_trusted_state,
-        new_head,
-    )
-    .map_err(ScalarReceiveCommitError::Sync)?;
+    commit_received(record, store, cursor_codec, merged_trusted_state, new_head)
+        .map_err(ScalarReceiveCommitError::Sync)?;
 
     *domain = candidate;
     Ok(sealed)
@@ -152,9 +152,7 @@ mod tests {
     use apc_core::{AtomId, WorkingEpochId};
     use apc_sync::{PublicationId, TransportCursor};
 
-    use crate::{
-        prepare_scalar_handoff, DevelopmentScalarTrustedStateCodec, TrustedStateCodec,
-    };
+    use crate::{prepare_scalar_handoff, DevelopmentScalarTrustedStateCodec, TrustedStateCodec};
 
     use super::*;
 
@@ -278,10 +276,8 @@ mod tests {
         let cursor_codec = RevisionCodec;
         let mut receiver = dirty_receiver();
         let trusted = trusted_codec.encode(&receiver.snapshot()).unwrap();
-        let mut record = DurableSyncRecord::new(
-            trusted,
-            Some(cursor_codec.encode(&Revision(1)).unwrap()),
-        );
+        let mut record =
+            DurableSyncRecord::new(trusted, Some(cursor_codec.encode(&Revision(1)).unwrap()));
         let mut store = MemoryStore::default();
 
         let remote = sender().causal().clone();
@@ -309,7 +305,9 @@ mod tests {
             .contains(&rid(200)));
         assert!(receiver.pending().is_none());
         assert_eq!(
-            cursor_codec.decode(record.applied_cursor().unwrap()).unwrap(),
+            cursor_codec
+                .decode(record.applied_cursor().unwrap())
+                .unwrap(),
             Revision(2)
         );
         assert_eq!(store.committed.as_ref(), Some(&record));
@@ -324,10 +322,8 @@ mod tests {
         let cursor_codec = RevisionCodec;
         let mut receiver = dirty_receiver();
         let trusted = trusted_codec.encode(&receiver.snapshot()).unwrap();
-        let mut record = DurableSyncRecord::new(
-            trusted,
-            Some(cursor_codec.encode(&Revision(1)).unwrap()),
-        );
+        let mut record =
+            DurableSyncRecord::new(trusted, Some(cursor_codec.encode(&Revision(1)).unwrap()));
         let before_domain = receiver.clone();
         let before_record = record.clone();
         let mut store = MemoryStore {
