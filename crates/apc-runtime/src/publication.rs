@@ -1,6 +1,13 @@
-use apc_core::{CoreError, LocalScalarDomain, LocalScalarSnapshot, RevisionId};
+use std::collections::{BTreeMap, BTreeSet};
+
+use apc_core::{
+    ContinuumId, CoreError, LocalScalarDomain, LocalScalarSnapshot, RevisionId, ScalarRegister,
+};
+use apc_crypto::ContentKey;
 use apc_sync::{
-    stage_outbound, DurableSyncRecord, PersistTransitionError, PublicationId, SyncRecordStore,
+    encode_protected_sync_part, protect_scalar_part, stage_outbound, DomainKey, DurableSyncRecord,
+    PersistTransitionError, ProtectedPartCodecError, PublicationId, ScalarSyncProjection,
+    SyncPartError, SyncProjection, SyncRecordStore,
 };
 
 /// Runtime codec for trusted local recovery state.
@@ -24,7 +31,7 @@ pub struct ProtectedPublication {
 }
 
 impl ProtectedPublication {
-    pub fn new(publication_id: PublicationId, objects: Vec<Vec<u8>>) -> Self {
+    fn new(publication_id: PublicationId, objects: Vec<Vec<u8>>) -> Self {
         Self {
             publication_id,
             objects,
@@ -37,6 +44,76 @@ impl ProtectedPublication {
 
     pub fn objects(&self) -> &[Vec<u8>] {
         &self.objects
+    }
+}
+
+/// A protected scalar publication coupled to the exact direct revisions whose
+/// causal dependency closure it carries.
+///
+/// Keeping these values together prevents application glue from protecting one
+/// semantic state while durably recording exposure for another. The wire object
+/// is created from the selected dependency closure before this value exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedScalarHandoff {
+    revision_ids: BTreeSet<RevisionId>,
+    publication: ProtectedPublication,
+}
+
+impl PreparedScalarHandoff {
+    pub fn revision_ids(&self) -> &BTreeSet<RevisionId> {
+        &self.revision_ids
+    }
+
+    pub fn publication(&self) -> &ProtectedPublication {
+        &self.publication
+    }
+}
+
+#[derive(Debug)]
+pub enum ScalarPublicationPrepareError {
+    EmptyRevisionSet,
+    Core(CoreError),
+    Protection(SyncPartError),
+    Wire(ProtectedPartCodecError),
+}
+
+impl core::fmt::Display for ScalarPublicationPrepareError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyRevisionSet => write!(f, "scalar publication must name at least one revision"),
+            Self::Core(error) => write!(f, "scalar publication semantic error: {error}"),
+            Self::Protection(error) => write!(f, "scalar publication protection error: {error}"),
+            Self::Wire(error) => write!(f, "scalar publication wire error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScalarPublicationPrepareError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Core(error) => Some(error),
+            Self::Protection(error) => Some(error),
+            Self::Wire(error) => Some(error),
+            Self::EmptyRevisionSet => None,
+        }
+    }
+}
+
+impl From<CoreError> for ScalarPublicationPrepareError {
+    fn from(value: CoreError) -> Self {
+        Self::Core(value)
+    }
+}
+
+impl From<SyncPartError> for ScalarPublicationPrepareError {
+    fn from(value: SyncPartError) -> Self {
+        Self::Protection(value)
+    }
+}
+
+impl From<ProtectedPartCodecError> for ScalarPublicationPrepareError {
+    fn from(value: ProtectedPartCodecError) -> Self {
+        Self::Wire(value)
     }
 }
 
@@ -53,33 +130,132 @@ pub enum ScalarRecoveryError<CodecError> {
     Core(CoreError),
 }
 
-/// Record semantic handoff/exposure and durable retry material as one runtime
-/// transition for the first scalar-domain implementation path.
+/// Construct the first complete semantic-to-protected-wire scalar publication.
 ///
-/// The candidate semantic domain is cloned first. `handoff()` therefore marks
-/// local causal identities exposed only on the candidate. The candidate snapshot
-/// is encoded into `DurableSyncRecord::trusted_state`, then `stage_outbound()`
-/// persists that exposed trusted state together with the exact protected bytes.
-/// Only after persistence succeeds is the caller's in-memory semantic domain
-/// replaced by the exposed candidate.
+/// Only the causal dependency closure of `revision_ids` is included. Unrelated
+/// concurrent revisions in the same register are deliberately excluded. A
+/// cloned semantic domain is asked to perform the same handoff first, which
+/// proves that every locally-owned member of the closure is finalized before any
+/// protected bytes are produced.
 ///
-/// A crash after persistence but before the in-memory assignment is safe: restart
-/// recovers the already-exposed candidate from the durable trusted state. A
-/// persistence failure leaves both caller-visible domain and sync record
-/// unchanged.
-pub fn stage_scalar_handoff<T, S, C, I>(
+/// The resulting object contains an authenticated encrypted scalar projection
+/// wrapped in the transport-facing protected-part encoding. It is still a
+/// development/pre-format representation, not the native `.apc` format.
+pub fn prepare_scalar_handoff<I>(
+    domain: &LocalScalarDomain<Vec<u8>>,
+    domain_key: DomainKey,
+    continuum_id: ContinuumId,
+    publication_id: PublicationId,
+    key: &ContentKey,
+    revision_ids: I,
+) -> Result<PreparedScalarHandoff, ScalarPublicationPrepareError>
+where
+    I: IntoIterator<Item = RevisionId>,
+{
+    let revision_ids: BTreeSet<RevisionId> = revision_ids.into_iter().collect();
+    if revision_ids.is_empty() {
+        return Err(ScalarPublicationPrepareError::EmptyRevisionSet);
+    }
+
+    // Use the actual semantic handoff rule as the publication eligibility check.
+    // This mutates only a throwaway clone and therefore cannot record exposure
+    // before the later durable staging boundary.
+    let mut candidate = domain.clone();
+    candidate.handoff(revision_ids.iter().copied())?;
+
+    let closure = dependency_closure(domain.causal(), &revision_ids)?;
+    let revisions = closure
+        .iter()
+        .map(|revision_id| {
+            domain
+                .causal()
+                .revision(*revision_id)
+                .cloned()
+                .ok_or(CoreError::UnknownRevision {
+                    revision_id: *revision_id,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let register = ScalarRegister::from_revisions(revisions)?;
+    let projection: ScalarSyncProjection =
+        SyncProjection::from_domains(BTreeMap::from([(domain_key, register)]));
+
+    let part = protect_scalar_part(
+        key,
+        continuum_id,
+        publication_id,
+        0,
+        1,
+        &projection,
+    )?;
+    let wire = encode_protected_sync_part(&part)?;
+
+    Ok(PreparedScalarHandoff {
+        revision_ids,
+        publication: ProtectedPublication::new(publication_id, vec![wire]),
+    })
+}
+
+/// Record semantic handoff/exposure and the matching prepared wire bytes as one
+/// durable runtime transition.
+///
+/// The caller cannot independently substitute revision IDs here: they travel in
+/// the same `PreparedScalarHandoff` that was built from the protected semantic
+/// dependency closure. The live semantic domain changes only after the durable
+/// recovery record and exact retry bytes have been committed.
+pub fn stage_prepared_scalar_handoff<T, S, C>(
     domain: &mut LocalScalarDomain<T>,
     record: &mut DurableSyncRecord,
     store: &mut S,
     codec: &C,
-    revision_ids: I,
+    prepared: PreparedScalarHandoff,
+) -> Result<(), ScalarHandoffStageError<C::Error, S::Error>>
+where
+    T: Clone + Eq,
+    S: SyncRecordStore,
+    C: TrustedStateCodec<LocalScalarSnapshot<T>>,
+{
+    stage_scalar_handoff(
+        domain,
+        record,
+        store,
+        codec,
+        prepared.revision_ids,
+        prepared.publication,
+    )
+}
+
+/// Restore the scalar semantic domain paired with a durable sync record.
+///
+/// This is a development scalar path, not a claim that one scalar snapshot is the
+/// final continuum recovery image. The important boundary is that restart uses
+/// the exact `trusted_state` committed with the durable cursor/outbox.
+pub fn recover_scalar_domain<T, C>(
+    record: &DurableSyncRecord,
+    codec: &C,
+) -> Result<LocalScalarDomain<T>, ScalarRecoveryError<C::Error>>
+where
+    T: Clone + Eq,
+    C: TrustedStateCodec<LocalScalarSnapshot<T>>,
+{
+    let snapshot = codec
+        .decode(record.trusted_state())
+        .map_err(ScalarRecoveryError::Codec)?;
+    LocalScalarDomain::restore(snapshot).map_err(ScalarRecoveryError::Core)
+}
+
+fn stage_scalar_handoff<T, S, C>(
+    domain: &mut LocalScalarDomain<T>,
+    record: &mut DurableSyncRecord,
+    store: &mut S,
+    codec: &C,
+    revision_ids: BTreeSet<RevisionId>,
     publication: ProtectedPublication,
 ) -> Result<(), ScalarHandoffStageError<C::Error, S::Error>>
 where
     T: Clone + Eq,
     S: SyncRecordStore,
     C: TrustedStateCodec<LocalScalarSnapshot<T>>,
-    I: IntoIterator<Item = RevisionId>,
 {
     let mut candidate = domain.clone();
     candidate
@@ -103,33 +279,35 @@ where
     Ok(())
 }
 
-/// Restore the scalar semantic domain paired with a durable sync record.
-///
-/// This is a development scalar path, not a claim that one scalar snapshot is the
-/// final continuum recovery image. The important boundary is that restart uses
-/// the exact `trusted_state` committed with the durable cursor/outbox.
-pub fn recover_scalar_domain<T, C>(
-    record: &DurableSyncRecord,
-    codec: &C,
-) -> Result<LocalScalarDomain<T>, ScalarRecoveryError<C::Error>>
-where
-    T: Clone + Eq,
-    C: TrustedStateCodec<LocalScalarSnapshot<T>>,
-{
-    let snapshot = codec
-        .decode(record.trusted_state())
-        .map_err(ScalarRecoveryError::Codec)?;
-    LocalScalarDomain::restore(snapshot).map_err(ScalarRecoveryError::Core)
+fn dependency_closure<T: Clone + Eq>(
+    causal: &ScalarRegister<T>,
+    revision_ids: &BTreeSet<RevisionId>,
+) -> Result<BTreeSet<RevisionId>, CoreError> {
+    let mut closure = BTreeSet::new();
+    let mut stack: Vec<RevisionId> = revision_ids.iter().copied().collect();
+
+    while let Some(revision_id) = stack.pop() {
+        if !closure.insert(revision_id) {
+            continue;
+        }
+        let revision = causal
+            .revision(revision_id)
+            .ok_or(CoreError::UnknownRevision { revision_id })?;
+        stack.extend(revision.parents.iter().copied());
+    }
+
+    Ok(closure)
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
-    use std::collections::BTreeMap;
 
     use apc_core::id::LOGICAL_ID_BYTES;
-    use apc_core::{ScalarRegister, WorkingEpochId};
-    use apc_sync::{SyncRecoveryError, TransportCursor};
+    use apc_core::{AtomId, ScalarRegister, WorkingEpochId};
+    use apc_sync::{
+        decode_protected_sync_part, unprotect_scalar_part, SyncRecoveryError, TransportCursor,
+    };
 
     use super::*;
 
@@ -204,9 +382,19 @@ mod tests {
     }
 
     fn pid(value: u64) -> PublicationId {
-        let mut bytes = [0_u8; 32];
-        bytes[24..].copy_from_slice(&value.to_be_bytes());
-        PublicationId::from_bytes(bytes)
+        PublicationId::from_bytes(logical_bytes(value))
+    }
+
+    fn cid(value: u64) -> ContinuumId {
+        ContinuumId::from_bytes(logical_bytes(value))
+    }
+
+    fn atom(value: u64) -> AtomId {
+        AtomId::from_bytes(logical_bytes(value))
+    }
+
+    fn domain_key() -> DomainKey {
+        DomainKey::new(atom(1), b"body".to_vec()).unwrap()
     }
 
     fn base_domain() -> LocalScalarDomain<String> {
@@ -225,6 +413,93 @@ mod tests {
         domain
     }
 
+    fn prepared_bytes_local(finalize: bool) -> LocalScalarDomain<Vec<u8>> {
+        let mut causal = ScalarRegister::new();
+        causal.assign(rid(100), b"base".to_vec()).unwrap();
+        let mut domain = LocalScalarDomain::from_causal(causal).unwrap();
+        domain.begin_epoch(wid(1), b"local".to_vec()).unwrap();
+        domain.seal_local(rid(200)).unwrap();
+        if finalize {
+            domain.finalize(rid(200)).unwrap();
+        }
+        domain
+    }
+
+    #[test]
+    fn protected_builder_carries_only_selected_dependency_closure() {
+        let key = ContentKey::from_bytes([0x61; 32]);
+        let mut domain = prepared_bytes_local(true);
+
+        let mut remote = ScalarRegister::new();
+        remote.assign(rid(100), b"base".to_vec()).unwrap();
+        remote.assign(rid(900), b"unrelated-remote".to_vec()).unwrap();
+        domain.observe_remote(&remote, None).unwrap();
+
+        let key_name = domain_key();
+        let prepared = prepare_scalar_handoff(
+            &domain,
+            key_name.clone(),
+            cid(7),
+            pid(8),
+            &key,
+            [rid(200)],
+        )
+        .unwrap();
+
+        assert_eq!(prepared.revision_ids(), &BTreeSet::from([rid(200)]));
+        assert_eq!(prepared.publication().objects().len(), 1);
+
+        let part = decode_protected_sync_part(&prepared.publication().objects()[0]).unwrap();
+        let projection = unprotect_scalar_part(&key, cid(7), &part).unwrap();
+        let published = projection.get(&key_name).unwrap();
+
+        assert!(published.revision(rid(100)).is_some());
+        assert!(published.revision(rid(200)).is_some());
+        assert!(published.revision(rid(900)).is_none());
+        assert_eq!(published.len(), 2);
+    }
+
+    #[test]
+    fn protected_builder_rejects_unfinalized_local_dependency_before_encryption() {
+        let key = ContentKey::from_bytes([0x62; 32]);
+        let domain = prepared_bytes_local(false);
+
+        let error = prepare_scalar_handoff(
+            &domain,
+            domain_key(),
+            cid(7),
+            pid(9),
+            &key,
+            [rid(200)],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ScalarPublicationPrepareError::Core(
+                CoreError::HandoffRequiresFinalizedRevision { revision_id }
+            ) if revision_id == rid(200)
+        ));
+    }
+
+    #[test]
+    fn protected_builder_rejects_empty_revision_set() {
+        let key = ContentKey::from_bytes([0x63; 32]);
+        let domain = prepared_bytes_local(true);
+
+        assert!(matches!(
+            prepare_scalar_handoff(
+                &domain,
+                domain_key(),
+                cid(7),
+                pid(10),
+                &key,
+                std::iter::empty(),
+            ),
+            Err(ScalarPublicationPrepareError::EmptyRevisionSet)
+        ));
+    }
+
     #[test]
     fn handoff_exposure_and_outbox_become_durable_together() {
         let codec = SnapshotVault::default();
@@ -238,7 +513,7 @@ mod tests {
             &mut record,
             &mut store,
             &codec,
-            [rid(200)],
+            BTreeSet::from([rid(200)]),
             ProtectedPublication::new(pid(1), vec![b"already-protected".to_vec()]),
         )
         .unwrap();
@@ -276,7 +551,7 @@ mod tests {
             &mut record,
             &mut store,
             &codec,
-            [rid(200)],
+            BTreeSet::from([rid(200)]),
             ProtectedPublication::new(pid(2), vec![b"already-protected".to_vec()]),
         )
         .unwrap_err();
@@ -305,7 +580,7 @@ mod tests {
             &mut record,
             &mut store,
             &codec,
-            [rid(200)],
+            BTreeSet::from([rid(200)]),
             ProtectedPublication::new(pid(3), vec![b"already-protected".to_vec()]),
         )
         .unwrap_err();
@@ -336,7 +611,7 @@ mod tests {
             &mut record,
             &mut store,
             &codec,
-            [rid(200)],
+            BTreeSet::from([rid(200)]),
             ProtectedPublication::new(pid(4), Vec::new()),
         )
         .unwrap_err();
