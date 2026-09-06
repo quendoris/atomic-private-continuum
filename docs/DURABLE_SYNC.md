@@ -1,6 +1,6 @@
 # A.P.C. durable synchronization recovery
 
-Status: **transport-independent crash recovery, protected durable record storage, foreground transport gating, scalar foreground-resume orchestration, bounded conflict follow-up, session/reconciliation/rebase transitions, deterministic scalar trusted-state recovery, typed outbound/inbound semantic boundaries and first set-based outbox batch primitives are implemented; Android power-loss behavior and final portable/local encodings remain unfrozen**.
+Status: **transport-independent crash recovery, protected durable record storage, foreground transport gating, scalar foreground-resume orchestration, set-based multi-publication resume, bounded conflict follow-up, session/reconciliation/rebase transitions, deterministic scalar trusted-state recovery and typed outbound/inbound semantic boundaries are implemented; Android power-loss behavior and final portable/local encodings remain unfrozen**.
 
 This document records the local durability rules between semantic state and an opaque transport such as GitHub. It supplements `SYNC.md`, `SYNC_CAPSULES.md`, `DURABILITY.md`, `CORE_IMPLEMENTATION.md` and `SYNC_IMPLEMENTATION.md`.
 
@@ -13,7 +13,8 @@ A sudden process/device failure may cause repeated transfer or repeated merge wo
 - partial multipart state to become semantically visible;
 - a locally exposed causal identity to become private again after restart;
 - a dirty local edit to acquire a remote causal parent that was not observable when the edit began;
-- an unknown transport outcome to be guessed as definite success or failure.
+- an unknown transport outcome to be guessed as definite success or failure;
+- an opaque publication ID or transport cursor byte ordering to become semantic or retry ordering by accident.
 
 The user-visible invariant remains:
 
@@ -76,7 +77,7 @@ The sync layer treats `trusted_state` as opaque bytes. Semantic/runtime code con
 
 ## 4. Local trusted-state encoding
 
-The first real scalar restart path now uses `apc-runtime::DevelopmentScalarTrustedStateCodec` instead of an in-memory test vault.
+The first real scalar restart path uses `apc-runtime::DevelopmentScalarTrustedStateCodec`.
 
 Its development framing, `APCLREC1`, encodes:
 
@@ -143,13 +144,13 @@ network I/O may begin
 
 The key rule is that semantic exposure and exact retry material become durable before network handoff can make the identity externally observable.
 
-`prepare_scalar_handoff()` constructs the protected scalar publication itself from the selected causal dependency closure. Application glue no longer supplies an unrelated arbitrary set of “exposed IDs” plus arbitrary ciphertext bytes.
+`prepare_scalar_handoff()` constructs the protected scalar publication from the selected causal dependency closure. Application glue does not supply an unrelated arbitrary set of “exposed IDs” plus arbitrary ciphertext bytes.
 
 The builder first performs the semantic `handoff()` rule on a clone, proving every locally-owned revision in the transitive dependency closure is finalized. It then exports only the selected causal closure, not unrelated concurrent branches residing in the same register, and protects that projection through the real sync AEAD/wire path.
 
 The resulting `PreparedScalarHandoff` couples the direct selected `RevisionId`s and exact protected wire bytes.
 
-`stage_prepared_scalar_handoff()` then:
+`stage_prepared_scalar_handoff()` then performs:
 
 ```text
 clone live LocalScalarDomain
@@ -175,7 +176,7 @@ If the process dies after persistence but before the final RAM assignment, resta
 
 A prepared publication stores complete already-protected wire objects verbatim.
 
-Because XChaCha20-Poly1305 uses fresh random nonces, protecting the same clear projection again would normally produce different ciphertext and therefore a different content-addressed GitHub object path.
+Because XChaCha20-Poly1305 uses fresh random nonces, protecting the same clear projection again would normally produce different ciphertext and therefore a different content-addressed transport object.
 
 Safe retry is therefore:
 
@@ -193,8 +194,6 @@ restart
 retry those exact bytes
 ```
 
-`publish_staged()` never regenerates ciphertext and never removes an outbox entry merely because a network call returned success.
-
 A remote mutation may succeed while its response is lost:
 
 ```text
@@ -205,23 +204,23 @@ remote accepts -> R1
 response lost
 ```
 
-The local outbox remains durable at `R0`. Retry against `R0` can return conflict; fetch from the durable cursor then rediscovers the accepted protected object. Reconciliation decides the outcome from observable state rather than from an ACK guess.
+The local outbox remains durable at `R0`. Retry against `R0` may return conflict; fetch from the durable cursor then rediscovers the accepted protected object. Reconciliation decides the outcome from observable state rather than from an ACK guess.
 
-The scalar runtime now has a stronger no-second-publish path for the catch-up pass that actually rediscovers the publication. `catch_up_single_scalar_domain()` returns the `RevisionId`s proven to have arrived in authenticated remote scalar state during that pass. `resume_single_scalar_domain()` may decode the stale pending exact wire object and retire it without another transport mutation only when the complete causal revision set carried by that publication is a subset of those newly authenticated remote IDs.
+`catch_up_single_scalar_domain()` reports `RevisionId`s proven to have arrived in authenticated remote scalar state during the exact catch-up pass. The runtime may retire a stale pending scalar publication without another transport mutation only when the complete causal revision set carried by that publication is a subset of those newly authenticated remote IDs.
 
 Merely finding the same `RevisionId` in already-local state is not enough. The proof is transport-observation evidence from the exact authenticated catch-up.
 
-If the process crashes after the catch-up cursor/state commit but before this second outbox-retirement durability barrier, that ephemeral proof is lost. Correctness still holds: the outbox remains durable and later follows the ordinary stale/rebase path. The current implementation deliberately does not invent persistent transport-observation evidence merely to preserve that optimization.
+If the process crashes after the catch-up cursor/state commit but before the later outbox-retirement durability barrier, that ephemeral proof is lost. Correctness still holds: the outbox remains durable and later follows the ordinary stale/rebase path. The current implementation deliberately does not invent persistent transport-observation evidence merely to preserve an optimization.
 
-## 7. Overlapping publications, cursor classes and set-based retry
+## 7. Overlapping publications and set-based retry
 
 Multiple pending publications may coexist. Their `PublicationId`s are opaque identities, not clocks, sequence numbers or retry priority.
 
-This creates an important rule:
+The runtime rule is:
 
-> A runtime must not choose “the first pending publication” merely because a map happens to sort `PublicationId` bytes.
+> Never choose “the first pending publication” merely because a container sorts `PublicationId` bytes.
 
-The first sync-layer answer is set-based batching by **equal expected transport cursor**.
+### 7.1 Equal-cursor transport batches
 
 `publish_staged_batch()` accepts a non-empty set of staged `PublicationId`s and verifies before network I/O that every member exists and every member targets the same `expected_cursor`. It then sends the exact already-protected objects from all members in one transport mutation.
 
@@ -242,23 +241,52 @@ P2 @ R1
    X  no implicit ordering / no guessed winner
 ```
 
-A successful batch transport call does not itself erase any outbox entry. `commit_reconciled_outbox_batch()` durably retires the reconciled publication set with one new cursor/trusted-state commit. Its transition is clone-persist-swap, so an unknown member or persistence failure leaves the caller's complete old record unchanged.
+A successful batch transport call does not itself erase any outbox entry. `commit_reconciled_outbox_batch()` durably retires a selected publication set with one cursor/trusted-state persistence barrier. Its transition is clone-persist-swap: unknown membership, cursor encoding failure or durability failure leaves the caller's complete old record unchanged. Unselected outbox entries are preserved.
 
-This batch is a transport coalescing primitive, not a semantic multi-domain transaction. It does not assert that all carried merge-domain changes form one indivisible application operation.
+The batch is transport coalescing, not a semantic multi-domain transaction. It does not assert that all carried merge-domain changes form one indivisible application operation.
 
-If `P1` and `P2` were prepared against `R0` and another accepted/reconciled mutation advances the durable cursor to `R1`, both historical publications remain exactly the bytes they were at `R0`. They must not be mutated in place and their `PublicationId`s must not be reused for different bytes.
+### 7.2 Set-based runtime resume
+
+`resume_scalar_outbox_set()` lifts those primitives into the scalar runtime without inventing ID order.
+
+After catch-up it classifies the initially pending outbox strictly by equality with the resulting durable cursor:
 
 ```text
-P2 @ R0
+initial pending set
+        |
+catch up from durable cursor
+        |
+new durable applied_cursor = R
+        |
+├── entry.expected_cursor == R  -> current set
+└── entry.expected_cursor != R  -> stale set
+```
+
+No cursor bytes are numerically or lexicographically compared.
+
+For the stale set, authenticated catch-up evidence is checked publication-by-publication. Every stale single-part scalar publication whose full causal closure is proven present in the authenticated remote state is retired as part of one durable reconciliation set.
+
+If any stale publication remains unresolved, the cycle returns:
+
+```text
+NeedsRebase { unresolved stale PublicationIds }
+```
+
+and **does not publish the current-cursor set**. This is deliberately conservative. It avoids smuggling a cross-generation scheduling rule into opaque IDs or transport cursor ordering.
+
+If no stale publication remains, all current-cursor entries are published together as one exact-byte batch. Success is followed by one durable batch retirement; conflict leaves the whole set pending.
+
+### 7.3 Stale replacement
+
+If a historical publication is still semantically needed after reconciliation, it is never mutated in place:
+
+```text
+P @ R0
         |
 R0 -> R1
         |
 semantic reconciliation
         |
-P2 redundant -> retire appropriately
-
-or
-
 still needed
         |
 re-export/re-protect
@@ -271,8 +299,6 @@ commit_rebased_outbox()
 `commit_rebased_outbox()` performs stale retirement plus fresh replacement as one durable transition. A persistence failure preserves the complete old record.
 
 The sync layer deliberately does not decide whether stale semantic content is redundant or still needs publication.
-
-The current scalar runtime resume path still handles at most one pending publication. The set primitives are deliberately below it first so the next runtime step can classify outbox entries by cursor/evidence as sets rather than accidentally creating `PublicationId` ordering semantics.
 
 ## 8. Safe inbound order
 
@@ -323,7 +349,7 @@ On persistence failure the live domain remains dirty, the pre-observation local 
 
 `MultipartInbox` authenticates and accumulates parts internally. No semantic projection is returned until the entire declared publication is present.
 
-The first runtime helper `decode_single_scalar_domain_object()` intentionally accepts only a complete single-part publication with exactly one expected `DomainKey`. Multipart runtime orchestration above `MultipartInbox` remains future work; incomplete parts must never be fed piecemeal to `commit_received_scalar_domain()`.
+The current runtime catch-up still consumes complete single-part scalar objects through `decode_single_scalar_domain_object()`. Wiring complete authenticated multipart assembly into the durable-cursor catch-up boundary is still open. Until that is implemented, incomplete parts must never be fed piecemeal to `commit_received_scalar_domain()`, and the cursor must never be advanced past an incomplete publication merely because some other publication in the fetched range is complete.
 
 ## 10. Protected durable record store
 
@@ -345,7 +371,7 @@ commit_durable()
 
 The caller supplies a non-empty local context combined with an internal domain separator. Wrong key/context or modified ciphertext fails authentication.
 
-`apc-storage-fs` therefore owns only crash-safe opaque-byte persistence. Semantic recovery encoding belongs in runtime.
+`apc-storage-fs` owns only crash-safe opaque-byte persistence. Semantic recovery encoding belongs in runtime.
 
 ## 11. Development Unix durability backend
 
@@ -364,9 +390,11 @@ A durable-but-unpublished candidate is ignored after reopen. A corrupted root or
 
 This establishes the Rust/Unix durability contract. It is not yet proof of Android storage-stack behavior under sudden power loss.
 
-## 12. Real outbound restart test
+## 12. Restart and recovery evidence
 
-The runtime integration test executes the complete first outbound vertical slice:
+### 12.1 Outbound vertical restart
+
+The runtime integration test executes:
 
 ```text
 LocalScalarDomain
@@ -388,20 +416,9 @@ LocalScalarDomain
 → decode + authenticate publication
 ```
 
-After reopen the test verifies:
+After reopen the test verifies that finalized/exposed/handoff bookkeeping, pending local working state, applied cursor and exact protected retry bytes survived together. Raw committed filesystem bytes are checked not to contain selected known plaintext strings or the clear `APCLREC1` marker.
 
-- finalized/exposed/handed-off semantic identity survived;
-- pending local working state survived independently;
-- the applied transport cursor survived;
-- the exact protected publication bytes survived;
-- the protected publication decodes to exactly the expected causal dependency closure;
-- raw committed filesystem bytes do not contain known semantic plaintext or the clear `APCLREC1` marker.
-
-The lost-ACK integration path extends this slice through restart, authenticated rediscovery of the accepted publication, durable outbox reconciliation and a second reopen. The publication is not sent again when the authenticated catch-up provides sufficient observation evidence.
-
-## 13. Real inbound restart test
-
-A second vertical test proves the corresponding incoming dirty-observation path.
+### 12.2 Inbound dirty-observation restart
 
 Two replicas start from the same scalar base:
 
@@ -410,65 +427,82 @@ receiver: dirty local WorkingEpoch begun at base frontier
 sender:   finalized remote RevisionId 900 from the same base
 ```
 
-The sender's revision is exported through the real protected publication builder and authenticated on the receiver. The receiver then observes it with a reserved pre-observation local `RevisionId 200` and a newer GitHub transport head.
+The sender's revision is protected through the real outbound builder. The receiver authenticates it and observes it with reserved local `RevisionId 200` plus a newer transport head. The candidate transition seals the dirty local epoch first using only the old base frontier, then merges remote revision `900`.
 
-The candidate transition seals the dirty local epoch first using only the base frontier, then merges remote revision `900`. The resulting frontier is:
+After close/reopen the frontier remains:
 
 ```text
 { local 200, remote 900 }
 ```
 
-and both ancestry tests remain false:
+with neither revision an ancestor of the other, and the newer transport cursor survives with the exact semantic state.
+
+### 12.3 Lost ACK and second durability barrier
+
+The single-publication restart path stages an exposed publication, simulates remote acceptance followed by process death before acknowledgement handling, reopens the protected Unix store, catches up from the durable cursor, rediscovers the accepted publication through authenticated state, retires the outbox without a second publish, then reopens again and verifies the reconciled result.
+
+A separate failure test forces the later outbox-retirement durability barrier to fail. The first caught-up `{trusted state, new cursor, pending outbox}` record remains authoritative; the outbox cannot disappear only from RAM.
+
+### 12.4 Accepted batch + failed local reconciliation
+
+The set-based recovery test covers the analogous multi-publication boundary:
 
 ```text
-200 !< 900
-900 !< 200
+P1 @ R1 ─┐
+P2 @ R1 ─┴─> one batch publish
+              |
+              remote accepts -> R2
+              |
+              local batch-retirement persist fails
 ```
 
-The merged APCLREC1 state and new cursor are protected and committed to the real Unix backend. After close/reopen the exact semantic domain, true concurrency and new GitHub cursor are recovered together. Known local and remote plaintext strings are absent from the raw committed bytes.
+After that failure, the local recovery record is still exactly the old durable `{cursor R1, P1, P2}` state although transport is already at `R2`.
 
-This is executable proof that the earlier “receipt != semantic observation” rule survives the real crypto/durability restart path rather than only an in-memory reference model.
+The next resume fetches the accepted protected objects from `R1 -> R2`, authenticates them, proves the complete causal closures for both pending publications, advances semantic state/cursor durably and retires both publications as one observed set. The transport publish call count remains one: recovery does not send either publication again.
 
-## 14. Foreground-only transport gate and bounded resume
+## 13. Foreground-only transport gate and bounded resume
 
-`ForegroundSyncLifecycle` and `ForegroundTransport<T>` start closed. Platform code must enter foreground before new `head`, `fetch_since` or `publish` calls reach transport.
+`ForegroundSyncLifecycle` and `ForegroundTransport<T>` start closed. Platform code must explicitly enter foreground before new `head`, `fetch_since` or `publish` calls reach transport.
 
-Entering background blocks future transport I/O without touching semantic state, cursor or outbox.
+Entering background blocks future transport I/O without touching semantic state, cursor or outbox. An already-running mutation may already have succeeded remotely; its outcome remains unknown and is recovered from durable facts.
 
-An already-running mutation may have succeeded remotely before cancellation/backgrounding. Its outcome remains unknown and is recovered through durable outbox + reconciliation; lifecycle state never rewrites history.
+The narrow single-publication orchestration remains available as `resume_single_scalar_domain()` and `resume_single_scalar_domain_bounded()`.
 
-`resume_single_scalar_domain()` now composes the first foreground scalar resume slice:
+The multi-publication path is now:
 
 ```text
-fetch from durable cursor
+resume_scalar_outbox_set()
         |
-authenticate / merge / durably advance cursor
+catch-up
         |
-inspect pending exact outbox
+reconcile stale entries proven observed
         |
-├─ stale + authenticated rediscovery proof -> durable reconcile, no republish
-├─ current expected cursor                -> retry exact bytes
-├─ stale without proof                    -> NeedsRebase
-└─ baseline unavailable                   -> stop safely
+unresolved stale set? -> NeedsRebase, stop
+        |
+current equal-cursor set
+        |
+one exact-byte batch publish
+        |
+durable batch retirement
 ```
 
-`resume_single_scalar_domain_bounded()` adds exactly one follow-up catch-up pass after a transport CAS conflict. It deliberately does not spin until success. A continuously moving remote head therefore cannot create an unbounded retry loop inside one foreground lifecycle callback.
+`resume_scalar_outbox_set_bounded()` adds exactly one follow-up set-based resume pass after a batch CAS conflict. There is deliberately no `while conflict` loop. One foreground callback can therefore do at most one initial batch publication attempt plus one catch-up/reclassification pass.
 
-The suite exercises remote acceptance, lost response, background blocking, foreground resume, stale-head conflict, authenticated refetch and the explicit stop at a rebase decision.
+A conflict test stages two entries in reverse `PublicationId` order, publishes them as one set, injects a remote head advance, performs exactly one follow-up catch-up, then stops with both entries in `NeedsRebase`. It performs two fetches and one publish; no ID becomes hidden retry priority.
 
 No daemon, Android foreground service, WorkManager job, alarm or background scheduler is required for correctness.
 
-## 15. Current failure matrix
+## 14. Current failure matrix
 
-The deterministic Rust tests now cover at least:
+The deterministic Rust suite now covers, among other cases:
 
 1. outbound staging persistence failure;
 2. network failure after durable staging;
 3. remote acceptance followed by response loss;
 4. inbound trusted-state/cursor persistence failure;
-5. reconciliation persistence failure;
-6. overlapping pending publications;
-7. stale outbox replacement with a fresh `PublicationId`;
+5. single-publication reconciliation persistence failure;
+6. multiple simultaneous outbox entries at the recovery layer;
+7. stale-entry replacement with a fresh `PublicationId`;
 8. failed stale replacement preserving old state;
 9. foreground/background transport blocking;
 10. backgrounding during a remotely accepted in-flight mutation;
@@ -477,25 +511,30 @@ The deterministic Rust tests now cover at least:
 13. deterministic local scalar recovery encode/decode validation;
 14. real encrypted outbound filesystem restart;
 15. authenticated inbound dirty observation preserving true concurrency;
-16. failed inbound semantic persistence leaving the live dirty state and old cursor unchanged;
+16. failed inbound semantic persistence leaving live dirty state and old cursor unchanged;
 17. real encrypted inbound filesystem restart preserving merged semantics and cursor;
 18. GitHub cursor round-trip with no ordering semantics;
 19. lost-ACK authenticated rediscovery with no second publish;
-20. failed lost-ACK reconciliation durability barrier preserving the pending outbox;
-21. one bounded post-conflict catch-up ending at explicit `NeedsRebase` rather than retry-looping;
-22. same-cursor pending publication set sent in one exact-byte transport mutation;
+20. failed lost-ACK reconciliation durability barrier preserving pending outbox;
+21. one bounded single-publication post-conflict catch-up ending at explicit `NeedsRebase`;
+22. same-cursor publication set sent in one exact-byte transport mutation;
 23. mixed-cursor publication set rejected before transport I/O;
-24. batch reconciliation durability failure preserving every selected outbox entry.
+24. batch reconciliation durability failure preserving every selected entry;
+25. set-based runtime publishing several same-cursor pending entries in one mutation without ID priority;
+26. unresolved stale set blocking a newer/current set without implicit cross-generation ordering;
+27. authenticated catch-up reconciling an entire stale lost-ACK set without republish;
+28. bounded batch conflict performing exactly one follow-up catch-up and stopping at set `NeedsRebase`;
+29. remote acceptance of a batch followed by local reconciliation failure and later authenticated set recovery with no second publish.
 
-## 16. What remains unproved/unfrozen
+## 15. What remains unproved/unfrozen
 
-The current implementation does not yet prove:
+The current implementation does not yet prove or freeze:
 
 - actual Android handset power-loss behavior;
 - final `.apc` storage layout;
 - final complete-continuum local recovery encoding;
 - compact long-lived causal membership/checkpoint representation;
-- multipart runtime receive orchestration;
+- multipart runtime receive orchestration and incomplete-range cursor policy;
 - production lifecycle/sequence/hierarchy persistence semantics;
 - attachment chunk reachability/recovery;
 - replica authentication/key evolution;
@@ -503,13 +542,13 @@ The current implementation does not yet prove:
 - irreducible multi-domain atomic publication semantics;
 - production GitHub HTTP/GraphQL client and credentials;
 - cancellation of an already-running platform HTTP mutation;
-- runtime classification/reconciliation of several pending publications across different cursor classes;
-- persistent transport-observation evidence across a crash between catch-up commit and outbox reconciliation;
+- automatic semantic re-export/rebase policy for unresolved stale publication sets across cursor generations;
+- persistent transport-observation evidence across a crash between catch-up commit and later outbox reconciliation;
 - very-old transport generation/rebootstrap policy.
 
-The existing `APCLREC1`, `APCSREC1`, `APCSYNC1` and `APCSPRT1` encodings must remain development contracts until the actual format freeze.
+The existing `APCLREC1`, `APCSREC1`, `APCSYNC1` and `APCSPRT1` encodings remain development contracts until the actual format freeze.
 
-## 17. Android validation path
+## 16. Android validation path
 
 Once the first Android binding exists, the same state machine should be exercised through ADB:
 
@@ -535,14 +574,14 @@ controlled device power-cycle tests
 
 The oracle must inspect semantic state, working epoch, finalization/exposure bookkeeping, cursor and outbox — not merely whether the app opens.
 
-## 18. Immediate next implementation work
+## 17. Immediate next implementation work
 
 The next durability-oriented slices should:
 
-1. lift the new equal-cursor set batching into runtime resume so several pending publications are classified by cursor/evidence as sets rather than by `PublicationId` ordering;
-2. add repeated conflict/rebase-chain and fetch-failure tests with several pending publications;
-3. wire complete authenticated multipart assembly into the runtime receive boundary without partial visibility;
-4. introduce a complete local trusted-state container abstraction for multiple independent domains without smuggling in cross-domain transaction semantics;
+1. wire complete authenticated multipart assembly into durable-cursor runtime catch-up without ever advancing the cursor past an incomplete publication;
+2. add repeated multi-publication conflict/rebase-chain and fetch-failure adversarial tests;
+3. introduce a complete local trusted-state container abstraction for several independent merge domains without smuggling in cross-domain transaction semantics;
+4. keep stale-set semantic re-export above the transport/session layer and require a fresh `PublicationId` for every replacement;
 5. later reproduce the current outbound/inbound restart matrix through Android process-kill and power-cycle tests.
 
 The responsibility split remains simple: semantic state decides meaning, crypto decides confidentiality/authenticity, durability decides what survives restart, lifecycle decides whether new transport I/O may begin, runtime composes those boundaries, and transport only moves opaque authenticated objects.
