@@ -1,4 +1,10 @@
-use apc_sync::{DurableSyncRecord, OpaqueTransport, SyncRecordStore, TransportCursorCodec};
+use std::collections::BTreeMap;
+
+use apc_core::{ContinuumId, RevisionId};
+use apc_crypto::ContentKey;
+use apc_sync::{
+    DomainKey, DurableSyncRecord, OpaqueTransport, SyncRecordStore, TransportCursorCodec,
+};
 
 use crate::{
     resume_scalar_recovery_outbox_set, LocalScalarRecoveryState, ScalarRecoveryResumeAction,
@@ -31,7 +37,9 @@ pub fn resume_scalar_recovery_outbox_set_bounded<T, S, TC, CC>(
     trusted_codec: &TC,
     cursor_codec: &CC,
     transport: &mut T,
-    spec: ScalarRecoveryResumeSpec<'_>,
+    key: &ContentKey,
+    continuum_id: ContinuumId,
+    pre_observation_revision_ids: &BTreeMap<DomainKey, RevisionId>,
 ) -> Result<
     ScalarRecoveryResumeCycleReport<T::Revision>,
     ScalarRecoveryResumeError<T::Error, TC::Error, S::Error, CC::Error>,
@@ -49,11 +57,7 @@ where
         trusted_codec,
         cursor_codec,
         transport,
-        ScalarRecoveryResumeSpec::new(
-            spec.key(),
-            spec.continuum_id(),
-            spec.pre_observation_revision_ids(),
-        ),
+        ScalarRecoveryResumeSpec::new(key, continuum_id, pre_observation_revision_ids),
     )?;
 
     if !matches!(&initial.action, ScalarRecoveryResumeAction::Conflict { .. }) {
@@ -70,7 +74,7 @@ where
         trusted_codec,
         cursor_codec,
         transport,
-        spec,
+        ScalarRecoveryResumeSpec::new(key, continuum_id, pre_observation_revision_ids),
     )?;
 
     Ok(ScalarRecoveryResumeCycleReport {
@@ -89,7 +93,7 @@ mod tests {
     };
     use apc_crypto::ContentKey;
     use apc_sync::{
-        DomainKey, FetchOutcome, PublicationId, PublishOutcome, SyncRecordStore, TransportCursor,
+        FetchOutcome, PublicationId, PublishOutcome, SyncRecordStore, TransportCursor,
     };
 
     use crate::{
@@ -284,7 +288,9 @@ mod tests {
             &codec,
             &cursor_codec,
             &mut transport,
-            ScalarRecoveryResumeSpec::new(&key, cid(1), &pre_observation),
+            &key,
+            cid(1),
+            &pre_observation,
         )
         .unwrap();
 
