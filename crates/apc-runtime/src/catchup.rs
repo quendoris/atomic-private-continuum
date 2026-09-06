@@ -120,7 +120,7 @@ where
             }
 
             let object_count = objects.len();
-            let mut combined_remote = None;
+            let mut combined_remote: Option<apc_core::ScalarRegister<Vec<u8>>> = None;
             for encoded in objects {
                 let decoded = decode_single_scalar_domain_object(
                     spec.key,
