@@ -9,6 +9,7 @@
 mod catchup;
 mod publication;
 mod receive;
+mod receive_set;
 mod resume;
 mod resume_batch;
 mod resume_batch_cycle;
@@ -32,6 +33,10 @@ pub use receive::{
     commit_received_scalar_domain, decode_complete_scalar_domain_objects,
     decode_single_scalar_domain_object, ReceivedScalarState, ScalarObjectDecodeError,
     ScalarReceiveCommitError, ScalarReceiveResult,
+};
+pub use receive_set::{
+    commit_received_recovery_scalar_domain, ReceivedRecoveryScalarState,
+    RecoveryScalarReceiveCommitError, RecoveryScalarReceiveResult,
 };
 pub use resume::{
     resume_single_scalar_domain, ScalarResumeError, ScalarResumeOutboxOutcome, ScalarResumeReport,
