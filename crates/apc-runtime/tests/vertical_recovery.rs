@@ -11,13 +11,15 @@ use apc_core::{
 use apc_crypto::ContentKey;
 use apc_runtime::{
     commit_received_scalar_domain, decode_single_scalar_domain_object, prepare_scalar_handoff,
-    recover_scalar_domain, stage_prepared_scalar_handoff, DevelopmentScalarTrustedStateCodec,
-    GitHubCursorCodec, ReceivedScalarState, TrustedStateCodec,
+    recover_scalar_domain, resume_single_scalar_domain, stage_prepared_scalar_handoff,
+    DevelopmentScalarTrustedStateCodec, GitHubCursorCodec, ReceivedScalarState,
+    ScalarCatchUpSpec, ScalarResumeOutboxOutcome, TrustedStateCodec,
 };
 use apc_storage_fs::UnixFsDurabilityBackend;
 use apc_sync::{
-    decode_protected_sync_part, unprotect_scalar_part, DomainKey, DurableSyncRecord,
-    ProtectedSyncRecordStore, PublicationId, SyncRecordStore, TransportCursorCodec,
+    decode_protected_sync_part, unprotect_scalar_part, DomainKey, DurableSyncRecord, FetchOutcome,
+    OpaqueTransport, ProtectedSyncRecordStore, PublicationId, PublishOutcome, SyncRecordStore,
+    TransportCursorCodec,
 };
 use apc_transport_github::GitHubCommitOid;
 
@@ -352,5 +354,172 @@ fn dirty_remote_observation_survives_real_crypto_filesystem_restart_with_true_co
             .decode(recovered_record.applied_cursor().unwrap())
             .unwrap(),
         new_head
+    );
+}
+
+struct AcceptedReplayTransport {
+    head: GitHubCommitOid,
+    objects: Vec<Vec<u8>>,
+    fetch_calls: usize,
+    publish_calls: usize,
+}
+
+impl OpaqueTransport for AcceptedReplayTransport {
+    type Revision = GitHubCommitOid;
+    type Error = &'static str;
+
+    fn head(&mut self) -> Result<Option<Self::Revision>, Self::Error> {
+        Ok(Some(self.head.clone()))
+    }
+
+    fn fetch_since(
+        &mut self,
+        known_head: Option<&Self::Revision>,
+    ) -> Result<FetchOutcome<Self::Revision>, Self::Error> {
+        self.fetch_calls += 1;
+        if known_head == Some(&self.head) {
+            Ok(FetchOutcome::UpToDate {
+                head: Some(self.head.clone()),
+            })
+        } else {
+            Ok(FetchOutcome::Changed {
+                head: self.head.clone(),
+                objects: self.objects.clone(),
+            })
+        }
+    }
+
+    fn publish(
+        &mut self,
+        _expected_head: Option<&Self::Revision>,
+        _objects: &[Vec<u8>],
+    ) -> Result<PublishOutcome<Self::Revision>, Self::Error> {
+        self.publish_calls += 1;
+        Err("lost-ack recovery must not publish again")
+    }
+}
+
+#[test]
+fn lost_ack_resume_reconciles_after_real_protected_filesystem_restart() {
+    let directory = TestDir::new();
+    let codec = DevelopmentScalarTrustedStateCodec;
+    let cursor_codec = GitHubCursorCodec;
+    let old_head = GitHubCommitOid::new("3333333333333333333333333333333333333333").unwrap();
+    let accepted_head = GitHubCommitOid::new("4444444444444444444444444444444444444444").unwrap();
+    let semantic_key = DomainKey::new(atom(3), b"body".to_vec()).unwrap();
+    let publication_key = ContentKey::from_bytes(PUBLICATION_KEY);
+
+    let mut causal = ScalarRegister::new();
+    causal.assign(rid(100), b"resume-base".to_vec()).unwrap();
+    let mut domain = LocalScalarDomain::from_causal(causal).unwrap();
+    domain
+        .begin_epoch(wid(3), b"resume-local-exposed".to_vec())
+        .unwrap();
+    domain.seal_local(rid(300)).unwrap();
+    domain.finalize(rid(300)).unwrap();
+
+    let mut record = DurableSyncRecord::new(
+        codec.encode(&domain.snapshot()).unwrap(),
+        Some(cursor_codec.encode(&old_head).unwrap()),
+    );
+    let backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+    let mut store = ProtectedSyncRecordStore::new(
+        backend,
+        ContentKey::from_bytes(STORE_KEY),
+        STORE_CONTEXT.to_vec(),
+    )
+    .unwrap();
+
+    let prepared = prepare_scalar_handoff(
+        &domain,
+        semantic_key.clone(),
+        cid(3),
+        pid(3),
+        &publication_key,
+        [rid(300)],
+    )
+    .unwrap();
+    let accepted_objects = prepared.publication().objects().to_vec();
+    stage_prepared_scalar_handoff(&mut domain, &mut record, &mut store, &codec, prepared).unwrap();
+
+    // Simulate process death after the remote side accepted the exact protected
+    // objects but before the acknowledgement could retire the durable outbox.
+    drop(store);
+    drop(record);
+    drop(domain);
+
+    let reopened_backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+    let mut reopened_store = ProtectedSyncRecordStore::new(
+        reopened_backend,
+        ContentKey::from_bytes(STORE_KEY),
+        STORE_CONTEXT.to_vec(),
+    )
+    .unwrap();
+    let mut recovered_record = reopened_store.load_committed().unwrap().unwrap();
+    let mut recovered_domain = recover_scalar_domain(&recovered_record, &codec).unwrap();
+    assert!(recovered_record.outbox().contains_key(&pid(3)));
+    assert_eq!(
+        cursor_codec
+            .decode(recovered_record.applied_cursor().unwrap())
+            .unwrap(),
+        old_head
+    );
+
+    let mut transport = AcceptedReplayTransport {
+        head: accepted_head.clone(),
+        objects: accepted_objects,
+        fetch_calls: 0,
+        publish_calls: 0,
+    };
+    let report = resume_single_scalar_domain(
+        &mut recovered_domain,
+        &mut recovered_record,
+        &mut reopened_store,
+        &codec,
+        &cursor_codec,
+        &mut transport,
+        ScalarCatchUpSpec::new(&publication_key, cid(3), &semantic_key, None),
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.outbox,
+        ScalarResumeOutboxOutcome::ObservedAndReconciled {
+            publication_id: pid(3),
+            head: accepted_head.clone()
+        }
+    );
+    assert!(recovered_record.outbox().is_empty());
+    assert_eq!(transport.fetch_calls, 1);
+    assert_eq!(transport.publish_calls, 0);
+    assert_eq!(
+        cursor_codec
+            .decode(recovered_record.applied_cursor().unwrap())
+            .unwrap(),
+        accepted_head
+    );
+
+    let expected_domain = recovered_domain.clone();
+    drop(reopened_store);
+    drop(recovered_record);
+    drop(recovered_domain);
+
+    let final_backend = UnixFsDurabilityBackend::open(directory.path()).unwrap();
+    let final_store = ProtectedSyncRecordStore::new(
+        final_backend,
+        ContentKey::from_bytes(STORE_KEY),
+        STORE_CONTEXT.to_vec(),
+    )
+    .unwrap();
+    let final_record = final_store.load_committed().unwrap().unwrap();
+    let final_domain = recover_scalar_domain(&final_record, &codec).unwrap();
+
+    assert_eq!(final_domain, expected_domain);
+    assert!(final_record.outbox().is_empty());
+    assert_eq!(
+        cursor_codec
+            .decode(final_record.applied_cursor().unwrap())
+            .unwrap(),
+        accepted_head
     );
 }
