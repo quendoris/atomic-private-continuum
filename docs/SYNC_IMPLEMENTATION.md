@@ -1,10 +1,10 @@
 # A.P.C. sync implementation
 
-Status: **protected scalar sync, opaque transport seam, GitHub adapter, crash-consistent durable outbox/session recovery, foreground transport gating and the first typed semantic-exposure runtime bridge are implemented; portable sync encoding and production GitHub HTTP binding are not frozen**.
+Status: **protected scalar sync, opaque transport seam, GitHub adapter, crash-consistent durable recovery, foreground transport gating, deterministic local scalar recovery encoding, typed outbound publication preparation and typed inbound observation are implemented; portable format and production GitHub HTTP binding remain unfrozen**.
 
 This document records the executable Rust synchronization boundary after the research model in `SYNC_EXPERIMENTS.md`. It does not replace `SYNC.md`, `SYNC_CAPSULES.md`, `GITHUB_TRANSPORT.md` or `DURABLE_SYNC.md`.
 
-## 1. Repository layer
+## 1. Repository layers
 
 The Rust workspace currently contains:
 
@@ -13,184 +13,69 @@ crates/apc-core/              semantic state, working/finalization and merge rul
 crates/apc-crypto/            authenticated symmetric protection
 crates/apc-sync/              transport-independent sync/session/recovery logic
 crates/apc-transport-github/  GitHub-specific opaque transport adapter
-crates/apc-storage-fs/        development local durability backend
-crates/apc-runtime/           platform-neutral composition/exposure boundary
+crates/apc-storage-fs/        development opaque-byte durability backend
+crates/apc-runtime/           platform-neutral composition boundary
 ```
 
-The intended dependency direction remains strict:
+The ownership rule is stricter than the textual call order:
 
 ```text
-semantic state
-      |
-sync projection / publication preparation
-      |
-AEAD protection
-      |
-durable outbox + cursor/state recovery
-      |
-OpaqueTransport
-      |
-GitHub adapter or another transport
-      |
-platform-neutral runtime composition
-      |
-Android / desktop platform binding
+semantic state decides meaning
+crypto decides confidentiality/authenticity
+sync decides projection/session/recovery protocol
+storage decides durable opaque-byte commit
+transport moves protected opaque objects
+runtime composes those contracts
+platform code drives lifecycle/UI/network bindings
 ```
 
-The diagram is dependency/ownership guidance rather than a requirement that bytes physically traverse every box in that textual order. In particular, runtime code composes already-defined core/sync/transport contracts; it does not become a second semantic layer.
+`apc-storage-fs` no longer contains a duplicate semantic snapshot codec. It stores opaque bytes only. Local semantic recovery encoding belongs in `apc-runtime`, above storage and below platform bindings.
 
-GitHub code does not import clear semantic merge state. Filesystem durability does not decide merge semantics. Transport revision identities do not participate in causal ordering.
+GitHub code does not import clear semantic merge state. Transport revision identities do not participate in causal ordering.
 
-## 2. Semantic projection has no publication identity
+## 2. Semantic projection remains free of transport identity
 
-The implemented `SyncProjection<K, S>` contains only merge-domain state:
+`SyncProjection<K, S>` contains merge-domain state only:
 
 ```text
 SyncProjection
-└── domains
-    ├── DomainKey -> mergeable state
-    └── ...
+└── DomainKey -> mergeable state
 ```
 
-It deliberately has no projection ID, publication ID, transport revision or timestamp.
+It has no publication ID, transport revision, timestamp or arrival-order field. The earlier Python research-model `max(projection_id)` leak is absent from the Rust path.
 
-The earlier Python research model used `max(projection_id)` while merging projections. That research-only ordering leak has been removed. Publication identity now exists only in protection/assembly/transport bookkeeping and cannot influence semantic merge.
-
-For the first scalar implementation, `DomainKey` contains:
+For the first scalar path, `DomainKey` is currently:
 
 ```text
-AtomId
-+
-pre-format domain identifier bytes
+AtomId + pre-format domain identifier bytes
 ```
 
-The final portable domain namespace/encoding remains open.
+The final portable domain namespace remains open.
 
-## 3. Dirty-domain state
+`APCSYNC1` is the deterministic development codec for `ScalarSyncProjection`. It serializes domain keys and scalar causal state with direct parent IDs. It is explicitly **not** the native `.apc` format or a compatibility promise.
 
-`DirtyDomainState<K, S>` separates current semantic state from local publication dirtiness.
+## 3. Protection and multipart visibility
 
-The implemented rules are:
-
-- a local replacement of one domain marks exactly that domain dirty;
-- importing validated remote state does not make a clean domain locally dirty;
-- if a domain already contains unpublished local work, importing remote state preserves the dirty marker;
-- export captures the exact current state of dirty domains;
-- publication acknowledgement clears a dirty marker only if the current domain still equals the state that was exported.
-
-Therefore this race is safe:
+`ProtectedSyncPart` carries clear assembly bookkeeping plus authenticated ciphertext:
 
 ```text
-export A
-   |
-local edit B
-   |
-ack A
-```
-
-The domain remains dirty because B differs from the acknowledged projection.
-
-## 4. Pre-format scalar projection encoding
-
-`apc-sync` currently has a deterministic development codec identified by `APCSYNC1`.
-
-The codec serializes:
-
-```text
-projection
-├── domain count
-└── domains in canonical map order
-    ├── AtomId
-    ├── domain identifier bytes
-    └── ScalarRegister
-        └── revisions in canonical register order
-            ├── RevisionId
-            ├── value bytes
-            └── direct causal parent IDs
-```
-
-Decoding validates scalar state through the ordinary core import boundary and rejects malformed magic/version, truncation, trailing bytes, duplicate domains and invalid revision structures.
-
-This codec is **not** the native `.apc` format and is not a compatibility promise. It exists so real protected synchronization can execute before checkpoint/coverage encoding is frozen.
-
-## 5. Protected sync parts
-
-Transport-facing state is represented by `ProtectedSyncPart`:
-
-```text
-ProtectedSyncPart
-├── publication_id     clear transport/assembly bookkeeping
-├── part_index         clear transport/assembly bookkeeping
-├── total_parts        clear transport/assembly bookkeeping
-└── payload            authenticated ciphertext
-```
-
-The clear bookkeeping is not trusted merely because it is visible. `protect_scalar_part()` binds the following values into AEAD associated data:
-
-```text
-sync-part domain separator
-ContinuumId
 PublicationId
 part_index
 total_parts
+ciphertext
 ```
 
-The payload is the authenticated encryption of the deterministic clear scalar projection.
+`protect_scalar_part()` binds `ContinuumId`, `PublicationId`, part index and total part count into AEAD associated data. Tampering with that clear bookkeeping therefore fails authentication before semantic merge.
 
-Consequently, changing the continuum, publication identity, part index or total part count without re-authentication causes the part to fail before semantic merge.
+`APCSPRT1` is the current development wire framing for protected parts.
 
-`PublicationId` is opaque. Its byte magnitude has no causal, temporal or merge meaning.
+`MultipartInbox` does not expose semantic state until all required authenticated parts exist. Duplicate identical delivery is harmless; conflicting part state or inconsistent totals fail closed. Multipart assembly remains independent of transport arrival order.
 
-## 6. Multipart atomic visibility
+The first runtime receive helper is intentionally narrower: `decode_single_scalar_domain_object()` accepts only one complete `part_index=0,total_parts=1` object containing exactly the expected domain. It refuses multipart or unexpected-domain material instead of making partial state observable.
 
-`MultipartInbox` authenticates incoming parts and retains incomplete publications internally.
+## 4. Opaque transport and GitHub
 
-A semantic projection is returned only when every required authenticated part is present.
-
-Duplicate delivery of an identical part is harmless. A conflicting authenticated state for the same publication/index is rejected. A publication whose declared total changes is rejected.
-
-For a complete publication, part projections are merged using normal semantic merge. Arrival order does not determine the user-visible result.
-
-## 7. Protected convergence and optimistic publication races
-
-The Rust integration suite executes independent replica state machines from the same scalar baseline, creates concurrent changes, protects them with real XChaCha20-Poly1305 and consumes publications in opposite orders. Both sides converge to the same causal state and concurrent frontier. Neither side becomes dirty merely because it imported remote state.
-
-The optimistic publication race is also exercised explicitly:
-
-```text
-A reads head R
-B reads head R
-
-A publishes against R
-        -> success, head RA
-
-B publishes against R
-        -> conflict, current head RA
-
-B fetches after R
-B authenticates + merges A
-B retains unpublished local work
-B exports/protects a retry
-B publishes against RA
-        -> success, head RB
-
-A fetches after RA
-A authenticates + merges B retry
-```
-
-Transport revision identities are used only for fetch/CAS bookkeeping. They never decide scalar order.
-
-## 8. Independent process exchange
-
-A development process worker allows protected sync bytes to cross an actual operating-system process boundary during tests.
-
-Separate producer processes independently construct causal states and emit only AEAD-protected payload bytes. Separate merge processes consume those payloads in different orders and emit deterministic clear projection encodings for comparison.
-
-The parent test verifies that exchanged payload files do not contain the known clear edit strings and that the independent merge processes produce byte-identical final projections. This remains a development harness, not a transport protocol.
-
-## 9. Opaque transport seam and GitHub adapter
-
-`OpaqueTransport` is an executable transport-independent boundary with three operations:
+`OpaqueTransport` exposes only:
 
 ```text
 head()
@@ -198,169 +83,260 @@ fetch_since(known_revision)
 publish(expected_revision, protected_objects)
 ```
 
-Its revision type is deliberately opaque. A transport revision may be retained as a crash-recovery cursor but has no semantic ordering meaning.
+The revision type is transport bookkeeping only.
 
-`apc-transport-github` implements this seam. Protected wire objects are stored under content-addressed transport paths derived from SHA-256 of the complete already-protected bytes. The adapter verifies that such paths are append-only/immutable while traversing incremental commits.
+`apc-transport-github` stores protected objects under content-addressed paths derived from SHA-256 of the complete already-protected wire bytes. Incremental traversal rejects mutation of an existing protected-object path. Publication uses expected-head CAS behavior; stale publication returns `Conflict`, and an unknown/too-old/nonlinear baseline returns `BaselineUnavailable` rather than pretending an incomplete incremental fetch is complete.
 
-Publication uses an expected-head CAS contract. A stale head returns `Conflict`; it never overwrites the winner. A missing/too-old/nonlinear baseline returns `BaselineUnavailable` rather than guessing that an incremental result is complete.
+`apc-runtime::GitHubCursorCodec` reversibly maps `GitHubCommitOid` to local opaque `TransportCursor` bytes. Lexical/numeric ordering of those bytes remains meaningless to A.P.C. semantics.
 
-`apc-runtime::GitHubCursorCodec` now provides the concrete reversible conversion between `GitHubCommitOid` and the local opaque `TransportCursor` recovery representation. The representation is exact UTF-8 bytes of the opaque commit identity; lexical or numeric comparison remains meaningless to A.P.C. semantics. Invalid UTF-8 or invalid adapter identities fail closed.
+The concrete production GitHub HTTP/GraphQL client and credential flow are still open.
 
-The current `GitHubApi` remains an injectable API boundary. A concrete production HTTP/GraphQL binding and authentication flow are still open.
+## 5. Durable session state
 
-## 10. Durable session recovery
-
-Transport success is not a local durability boundary. `DurableSyncRecord` therefore couples:
+`DurableSyncRecord` crash-atomically couples:
 
 ```text
-trusted_state
+trusted semantic/recovery state
 +
 applied transport cursor
 +
 pending outbound publications
 ```
 
-into one crash-recovery unit.
+Each outbox entry retains its exact protected wire bytes and the cursor against which those bytes were prepared.
 
-Each `DurableOutboxEntry` stores the exact already-protected wire bytes plus the transport cursor against which they were prepared. Exact bytes survive restart so a retry never re-encrypts an allegedly equivalent publication into a new transport object accidentally.
+The session coordinator currently provides:
 
-The session coordinator provides:
+- `stage_outbound()` — persist exposed trusted state plus exact retry bytes before network I/O;
+- `publish_staged()` — send only exact durable bytes;
+- `fetch_from_durable_cursor()` — fetch from the cursor paired with durable state;
+- `commit_received()` — commit merged trusted state and new cursor together;
+- `commit_reconciled_outbox()` — retire one named publication only with durable reconciliation;
+- `commit_rebased_outbox()` — replace one stale outbox entry with a fresh `PublicationId`, fresh protected bytes and newer cursor in one durable transition.
 
-- `stage_outbound()` — persist exposure/retry material before network I/O;
-- `publish_staged()` — send only exact durable outbox bytes;
-- `fetch_from_durable_cursor()` — fetch only from the cursor paired with durable local state;
-- `commit_received()` — durably pair merged trusted state with the newly applied cursor;
-- `commit_reconciled_outbox()` — retire one named pending publication only together with durable reconciliation;
-- `commit_rebased_outbox()` — atomically replace one stale pending publication with a fresh identity/protected object set prepared against a newer cursor.
+Transport success is never itself a local durability boundary. A lost response after remote acceptance remains an unknown outcome: exact outbox bytes survive, retry may reveal a stale-head conflict, and refetch/reconciliation resolves the result from durable facts.
 
-A response can be lost after remote acceptance. The implementation treats that as an unknown outcome: retain outbox, retry exact bytes, use stale-head conflict as evidence to refetch, then reconcile from durable facts.
+## 6. Deterministic local scalar recovery encoding
 
-`ProtectedSyncRecordStore` serializes the complete recovery record, authenticates/encrypts it, and sends only protected bytes through `commit_durable()` to the local durability backend.
+`apc-runtime::DevelopmentScalarTrustedStateCodec` now replaces the earlier in-memory test-vault assumption for the real scalar restart path.
 
-## 11. Typed semantic exposure boundary
-
-The first platform-neutral runtime bridge now closes the most dangerous gap between `FinalizationLedger::handoff()` and durable sync staging for the scalar path.
-
-The implemented transition is:
+Its current development framing is `APCLREC1`. It encodes the complete `LocalScalarSnapshot<Vec<u8>>` required by the current scalar runtime path:
 
 ```text
-current LocalScalarDomain
-        |
-clone candidate
-        |
-candidate.handoff(revision_ids)
-        |
-validate all local causal dependencies are finalized
-        |
-encode candidate snapshot through TrustedStateCodec
-        |
-stage_outbound(
-    encoded exposed trusted state,
-    PublicationId,
-    exact protected objects
-)
-        |
-DURABILITY BARRIER
-        |
-replace caller's in-memory semantic domain
-        |
-network I/O may begin later
+working state
+├── causal register
+└── optional WorkingEpoch
+    ├── WorkingEpochId
+    ├── current local value
+    └── observed frontier
+
+finalization state
+├── locally-owned RevisionIds
+├── FinalizedStatements
+├── exposed local RevisionIds
+└── directly handed-off local RevisionIds
 ```
 
-`stage_scalar_handoff()` does not mark the live in-memory semantic domain exposed before the durable record succeeds. If handoff validation, trusted-state encoding or durability fails, the caller's domain and sync record remain unchanged.
+Encoding and decoding both validate the snapshot through `LocalScalarDomain::restore()`. An invalid pending frontier or inconsistent finalization/exposure bookkeeping therefore cannot become valid merely because it was serialized.
 
-If a crash occurs after persistence but before the final in-memory assignment, restart uses the exposed semantic snapshot already paired with the durable outbox, so an externally observable causal identity cannot become private again merely because the process died.
+`APCLREC1` is local development recovery framing only. It is not `.apc`, not `APCSYNC1`, and not frozen compatibility.
 
-`recover_scalar_domain()` restores the scalar domain from the exact trusted-state bytes paired with the recovery record. The `TrustedStateCodec` itself remains an explicit runtime seam: no final local recovery encoding is frozen by this bridge.
+## 7. Typed outbound semantic-to-wire boundary
 
-The bridge also refuses an unfinalized local dependency before any persistence occurs, preserving the finalization rule that every local identity in the handed-off transitive dependency closure must be frozen before transport exposure.
+The first scalar outbound path no longer accepts an arbitrary pair of “revision IDs” and “already protected bytes” from application glue.
 
-This is intentionally the first scalar-domain implementation path, not yet the final complete-continuum recovery codec or a general multi-domain publication transaction.
-
-## 12. Overlapping pending publications
-
-The outbox may contain more than one pending publication. Reconciling one does not rewrite the others.
-
-This creates an important stale-outbox case:
+`prepare_scalar_handoff()` receives:
 
 ```text
-P1 expected R0
-P2 expected R0
-
-P1 reconciles -> durable cursor R1
-P2 remains exact bytes expected R0
+LocalScalarDomain<Vec<u8>>
+DomainKey
+ContinuumId
+PublicationId
+ContentKey
+selected RevisionIds
 ```
 
-`P2` cannot be mutated in place and its `PublicationId` cannot be reused for different protected bytes. If semantic reconciliation shows that the contribution still needs publication, the higher layer must re-export/re-protect it under a fresh `PublicationId` against `R1`. `commit_rebased_outbox()` makes replacement of the stale durable entry crash-atomic.
+and performs these steps:
 
-Whether a stale entry is semantically redundant or must be rebased remains a semantic decision above transport bookkeeping.
+```text
+clone semantic domain
+        |
+candidate.handoff(selected RevisionIds)
+        |
+prove every locally-owned dependency in the causal closure is finalized
+        |
+compute exact causal dependency closure
+        |
+build one-domain ScalarSyncProjection from that closure only
+        |
+protect_scalar_part()
+        |
+encode_protected_sync_part()
+        |
+PreparedScalarHandoff {
+    selected RevisionIds,
+    exact protected wire object
+}
+```
 
-## 13. Foreground-only lifecycle boundary
+The dependency-closure step matters. If the local register also contains an unrelated concurrent remote revision, publishing local revision `L` does not automatically expose that unrelated branch merely because both happen to be stored in the same register.
 
-`ForegroundSyncLifecycle` and `ForegroundTransport<T>` encode the no-background-sync rule directly.
+`stage_prepared_scalar_handoff()` then consumes the coupled `PreparedScalarHandoff`, clones the live semantic domain, records handoff/exposure on the candidate, encodes the exposed trusted snapshot, persists that snapshot together with the exact protected outbox, and only after the durability barrier replaces the live in-memory domain.
 
-The gate starts closed. A platform binding must explicitly enter foreground before `head`, `fetch_since` or `publish` can reach the wrapped transport. Entering background blocks all future transport calls without modifying the durable outbox or cursor.
+Therefore the dangerous state cannot occur:
 
-The gate intentionally does not claim that an already-running HTTP mutation can be made nonexistent. If the platform cancels a request after remote acceptance but before the response survives, the outcome is unknown and is recovered through the same durable outbox protocol.
+```text
+RAM says RevisionId is exposed
+persistent recovery state says it is private
+network may already have received it
+```
 
-The suite exercises exactly that sequence: remote acceptance, foreground→background transition, lost response, blocked retry while backgrounded, foreground resume, stale-head conflict and refetch of the accepted bytes.
+An unfinalized local dependency fails before encryption/publication preparation. A durability failure leaves both the live semantic domain and durable sync record unchanged.
 
-No worker, daemon, alarm or background scheduler is required for correctness.
+## 8. Typed inbound authenticated-observation boundary
 
-## 14. Current deterministic failure coverage
+The inverse scalar path now exists as an executable runtime boundary.
 
-The executable matrix now checks at least these boundaries:
+First, `decode_single_scalar_domain_object()` performs wire decode, AEAD authentication, `ContinuumId`/publication context verification and exact expected-domain extraction.
 
-- failure to persist an outbound outbox does not expose a new in-memory/network-eligible state;
-- ordinary network failure after durable staging preserves exact retry material;
-- remote acceptance followed by response loss is recovered as unknown outcome;
-- inbound merge persistence failure cannot advance only the process-local cursor;
-- reconciliation persistence failure cannot retire outbox or advance cursor;
-- reconciling one outbox entry preserves other pending entries verbatim;
-- stale-entry rebase uses a fresh `PublicationId` and one durable replacement transition;
-- failed rebase persistence restores the complete old state;
-- publication identity cannot be reused for changed protected bytes;
-- foreground/background transitions gate transport without touching semantic state;
-- background during an accepted in-flight publication remains recoverable on resume;
-- scalar semantic handoff and durable outbox staging advance together;
-- failed scalar handoff persistence cannot expose only the process-local finalization ledger;
-- an unfinalized local causal dependency cannot cross the runtime publication boundary;
-- real development filesystem restart tests preserve the state/cursor/outbox pairing;
-- the GitHub adapter participates in a lost-ACK restart/reconciliation integration test.
+Then `ReceivedScalarState` bundles three values that must not drift apart in application glue:
 
-These tests establish the current Rust contracts, not real handset power-loss behavior.
+```text
+authenticated remote ScalarRegister
+pre-observation local RevisionId, if dirty local work must be sealed
+new transport head
+```
 
-## 15. Still intentionally unresolved
+`commit_received_scalar_domain()` executes:
 
-The current Rust sync implementation does not freeze or fully solve:
+```text
+clone live LocalScalarDomain
+        |
+candidate.observe_remote(remote, pre-observation RevisionId)
+        |
+if dirty:
+    seal local WorkingEpoch using the frontier it actually observed
+        |
+merge authenticated remote state
+        |
+encode candidate APCLREC1 trusted state
+        |
+commit_received(candidate trusted state, new transport cursor)
+        |
+LOCAL DURABILITY BARRIER
+        |
+replace live semantic domain
+```
 
-- final compact causal/checkpoint representation;
-- baseline membership proofs for omitted historical parent bodies;
-- final portable `.apc` encoding;
-- final local trusted-state recovery encoding for the complete continuum;
-- lifecycle/tombstone production sync semantics;
-- sequence/hierarchy production sync semantics;
-- attachment chunk reachability and protected chunk manifests;
-- content-key epoch selection inside sync envelopes;
-- replica signatures/key evolution;
+This preserves the earlier working-state research result: network receipt does not retroactively become a causal parent of local work that began before the remote state was semantically observed.
+
+If durable receive persistence fails, the live domain remains dirty, the pre-observation local revision is not created in live state, and the old durable cursor remains authoritative.
+
+## 9. Real vertical restart tests
+
+`crates/apc-runtime/tests/vertical_recovery.rs` now exercises both directions across real crate boundaries rather than only in-memory mocks.
+
+### 9.1 Outbound vertical slice
+
+The test executes:
+
+```text
+LocalScalarDomain
+→ exact selected causal dependency closure
+→ ScalarSyncProjection
+→ XChaCha20-Poly1305 protected sync part
+→ APCSPRT1 wire
+→ PreparedScalarHandoff
+→ exposed APCLREC1 trusted state + exact outbox
+→ ProtectedSyncRecordStore
+→ XChaCha20-Poly1305 local record protection
+→ UnixFsDurabilityBackend
+→ close/reopen
+→ decrypt recovery record
+→ decode/restore LocalScalarDomain
+→ decode/unprotect exact outbox wire
+```
+
+It verifies that finalized/exposed/handoff bookkeeping, pending local working state, transport cursor and exact protected retry bytes survive restart. Raw committed filesystem bytes are checked not to contain selected known plaintext strings or the clear `APCLREC1` marker.
+
+### 9.2 Inbound vertical slice
+
+A second test creates one remote finalized scalar revision and one dirty local working epoch from the same base, protects the remote publication through the real outbound builder, authenticates/decodes it on the receiver, then commits semantic observation with a newer GitHub transport cursor through the real protected filesystem record store.
+
+The dirty local epoch is sealed with the old observed frontier before remote merge. After close/reopen the recovered causal frontier contains both local and remote revisions as genuinely concurrent branches; neither is an ancestor of the other. The new transport cursor and the exact semantic state survive together. Raw filesystem bytes again do not contain the known local/remote plaintexts.
+
+These are process/restart and Unix durability-contract proofs, not yet physical Android power-loss proofs.
+
+## 10. Overlapping outbox and stale publication replacement
+
+Multiple pending publications may coexist. Reconciling one does not mutate another.
+
+If `P1` and `P2` were prepared at `R0` and reconciling `P1` advances the durable cursor to `R1`, `P2` remains the exact historical bytes it was at `R0`. It cannot be mutated or reused under the same `PublicationId`.
+
+If semantic reconciliation says its contribution is still needed, a higher layer produces new protected bytes under a fresh `PublicationId`, and `commit_rebased_outbox()` commits stale retirement plus fresh replacement atomically. If the old publication became redundant, it can instead be retired by the appropriate reconciliation path.
+
+## 11. Foreground-only lifecycle boundary
+
+`ForegroundSyncLifecycle` and `ForegroundTransport<T>` start transport closed. A platform binding must explicitly enter foreground before `head`, `fetch_since` or `publish` can reach the wrapped transport. Entering background blocks future transport calls without changing semantic state, cursor or outbox.
+
+An already-running mutation may already have succeeded remotely when the application backgrounds. The lifecycle gate therefore does not invent an outcome. The failure suite exercises remote acceptance + lost response + background blocking + foreground retry + stale-head conflict + refetch.
+
+No worker, daemon, foreground service, alarm or background scheduler is required for correctness.
+
+## 12. Current failure coverage
+
+The Rust suite currently covers, among other cases:
+
+- outbound outbox persistence failure;
+- network failure after durable staging;
+- remote acceptance followed by lost response;
+- inbound merged-state persistence failure;
+- reconciliation persistence failure;
+- multiple simultaneous outbox entries;
+- stale-entry replacement with a fresh publication identity;
+- failed stale-entry replacement;
+- foreground/background transport gating;
+- backgrounding during an accepted in-flight mutation;
+- unfinalized local dependency rejected before outbound protection;
+- outbound semantic exposure + exact protected outbox committed together;
+- deterministic scalar recovery snapshot validation;
+- real encrypted filesystem restart for outbound exposure/outbox;
+- authenticated inbound scalar observation + cursor advance committed together;
+- real encrypted filesystem restart preserving true local/remote concurrency after dirty observation;
+- GitHub cursor round-trip without semantic ordering.
+
+## 13. Still intentionally unresolved
+
+The executable scalar path does **not** freeze or fully solve:
+
+- final compact causal/checkpoint representation and old-baseline membership proofs;
+- native `.apc` binary layout;
+- complete-continuum local trusted-state encoding;
+- production lifecycle/tombstone semantics;
+- production sequence/hierarchy semantics;
+- attachment chunk manifests/reachability;
+- content-key epoch selection;
+- replica signatures and key evolution;
 - replay/rollback policy;
-- general multi-domain finalization/exposure-to-publication preparation;
-- production GitHub HTTP/GraphQL client, credentials and repository discovery;
-- cancellation of already-running platform network requests;
-- Android storage/lifecycle integration;
-- long-offline transport-generation compaction.
+- truly irreducible multi-domain atomic publication semantics;
+- multipart runtime receive orchestration above `MultipartInbox`;
+- production GitHub HTTP/GraphQL client and credentials;
+- cancellation bridge for an already-running platform request;
+- foreground-resume orchestration;
+- Android filesystem/lifecycle validation;
+- long-offline transport generation/checkpoint retention.
 
-The current scalar capsule may still carry more causal metadata than the eventual compact representation. Correctness is being established before compression.
+The current scalar capsules may retain more causal material than the eventual compact format. Correctness remains ahead of compression.
 
-## 16. Immediate next implementation work
+## 14. Immediate next implementation work
 
-The next implementation slices should keep the same separation:
+The next slices should now move outward from the proven scalar vertical path rather than rebuilding it:
 
-1. replace the test-vault trusted-state codec with a deterministic versioned development codec for the scalar `LocalScalarSnapshot`, still explicitly pre-format;
-2. extend the typed runtime bridge from one scalar domain toward a complete trusted local recovery image without inventing cross-domain atomic semantics;
-3. extend failure injection across fetch failure, multi-entry stale rebase chains and repeated conflict/rebase cycles;
-4. add a cancellable platform-network boundary while treating a cancelled mutation as unknown outcome unless reconciliation proves otherwise;
-5. add foreground-resume orchestration that immediately executes durable-cursor catch-up/reconciliation;
-6. carry the same test oracle onto Android through ADB before claiming handset power-loss guarantees.
+1. build a small runtime sync-session orchestrator that combines foreground resume, durable-cursor fetch, authenticated decode/merge and pending-outbox retry through the existing transitions;
+2. add deterministic failure tests for fetch failure and repeated conflict/rebase cycles with several pending publications;
+3. extend receive orchestration to complete authenticated multipart publications without permitting partial semantic visibility;
+4. introduce the first complete local trusted-state container abstraction for several independent merge domains while explicitly avoiding accidental cross-domain transaction semantics;
+5. keep the GitHub API injectable until the runtime/session invariants are stable, then add the concrete production GitHub binding;
+6. carry the same restart/failure oracle onto Android through ADB before claiming handset power-loss guarantees.
 
-A.P.C. transport code should remain boring by construction: move opaque authenticated objects and expose enough CAS/change-detection information for trusted semantic/sync code to do the real work.
+A.P.C. transport remains deliberately boring: move opaque authenticated objects and expose enough CAS/change-detection information for trusted semantic/runtime code to decide meaning.
