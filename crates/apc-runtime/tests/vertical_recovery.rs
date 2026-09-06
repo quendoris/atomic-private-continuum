@@ -12,8 +12,8 @@ use apc_crypto::ContentKey;
 use apc_runtime::{
     commit_received_scalar_domain, decode_single_scalar_domain_object, prepare_scalar_handoff,
     recover_scalar_domain, resume_single_scalar_domain, stage_prepared_scalar_handoff,
-    DevelopmentScalarTrustedStateCodec, GitHubCursorCodec, ReceivedScalarState,
-    ScalarCatchUpSpec, ScalarResumeOutboxOutcome, TrustedStateCodec,
+    DevelopmentScalarTrustedStateCodec, GitHubCursorCodec, ReceivedScalarState, ScalarCatchUpSpec,
+    ScalarResumeOutboxOutcome, TrustedStateCodec,
 };
 use apc_storage_fs::UnixFsDurabilityBackend;
 use apc_sync::{
