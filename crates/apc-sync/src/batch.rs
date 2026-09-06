@@ -251,13 +251,9 @@ mod tests {
             published_objects: Vec::new(),
         };
 
-        let outcome = publish_staged_batch(
-            &record,
-            [pid(2), pid(1)],
-            &mut transport,
-            &RevisionCodec,
-        )
-        .unwrap();
+        let outcome =
+            publish_staged_batch(&record, [pid(2), pid(1)], &mut transport, &RevisionCodec)
+                .unwrap();
 
         assert_eq!(outcome, PublishOutcome::Published { head: Revision(2) });
         assert_eq!(transport.publish_calls, 1);
@@ -296,13 +292,8 @@ mod tests {
             published_objects: Vec::new(),
         };
 
-        let error = publish_staged_batch(
-            &record,
-            [pid(1), pid(2)],
-            &mut transport,
-            &RevisionCodec,
-        )
-        .unwrap_err();
+        let error = publish_staged_batch(&record, [pid(1), pid(2)], &mut transport, &RevisionCodec)
+            .unwrap_err();
 
         assert!(matches!(error, BatchPublishError::MixedExpectedCursor));
         assert_eq!(transport.publish_calls, 0);
