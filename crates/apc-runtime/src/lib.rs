@@ -6,6 +6,7 @@
 //! adapter composition that should be shared by Android and desktop without
 //! becoming portable format semantics.
 
+mod catchup;
 mod publication;
 mod receive;
 mod trusted_state;
@@ -13,6 +14,10 @@ mod trusted_state;
 use apc_sync::{TransportCursor, TransportCursorCodec};
 use apc_transport_github::GitHubCommitOid;
 
+pub use catchup::{
+    catch_up_single_scalar_domain, ScalarCatchUpError, ScalarCatchUpOutcome, ScalarCatchUpResult,
+    ScalarCatchUpSpec,
+};
 pub use publication::{
     prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
     PreparedScalarHandoff, ProtectedPublication, ScalarHandoffStageError,
