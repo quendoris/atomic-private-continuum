@@ -1,0 +1,11 @@
+[package]
+name = "apc-runtime"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Platform-neutral runtime orchestration for Atomic Private Continuum"
+publish = false
+
+[dependencies]
+apc-sync = { path = "../apc-sync" }
+apc-transport-github = { path = "../apc-transport-github" }
