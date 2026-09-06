@@ -70,6 +70,7 @@ pub type ScalarBatchResumeResult<R, TransportError, TrustedError, StoreError, Cu
 ///
 /// The function never compares transport cursor bytes and never interprets the
 /// canonical order of publication IDs as time or priority.
+#[allow(clippy::type_complexity)]
 pub fn resume_scalar_outbox_set<T, S, TC, CC>(
     domain: &mut LocalScalarDomain<Vec<u8>>,
     record: &mut DurableSyncRecord,
