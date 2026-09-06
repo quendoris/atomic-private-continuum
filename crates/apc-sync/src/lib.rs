@@ -10,6 +10,7 @@ mod codec;
 mod foreground;
 mod projection;
 mod protected;
+mod rebase;
 mod record_store;
 mod recovery;
 mod session;
@@ -26,6 +27,7 @@ pub use protected::{
     protect_scalar_part, unprotect_scalar_part, MultipartInbox, ProtectedSyncPart, PublicationId,
     SyncPartError,
 };
+pub use rebase::commit_rebased_outbox;
 pub use record_store::{ProtectedSyncRecordStore, ProtectedSyncStoreError};
 pub use recovery::{
     decode_durable_sync_record, encode_durable_sync_record, DurableOutboxEntry, DurableSyncRecord,
