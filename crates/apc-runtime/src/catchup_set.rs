@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use apc_core::{
-    ContinuumId, CoreError, LocalScalarDomain, RevisionId, ScalarRevision,
-};
+use apc_core::{ContinuumId, CoreError, LocalScalarDomain, RevisionId, ScalarRevision};
 use apc_crypto::ContentKey;
 use apc_sync::{
     commit_received, decode_protected_sync_part, fetch_from_durable_cursor, DurableSyncRecord,
@@ -10,9 +8,7 @@ use apc_sync::{
     SessionCommitError, SessionIoError, SyncPartError, SyncRecordStore, TransportCursorCodec,
 };
 
-use crate::{
-    LocalScalarRecoveryState, LocalScalarRecoveryStateError, TrustedStateCodec,
-};
+use crate::{LocalScalarRecoveryState, LocalScalarRecoveryStateError, TrustedStateCodec};
 
 /// Immutable parameters for one complete multi-domain recovery catch-up pass.
 ///
@@ -139,11 +135,8 @@ where
             }
 
             let object_count = objects.len();
-            let projections = decode_complete_scalar_projections(
-                spec.key,
-                spec.continuum_id,
-                &objects,
-            )?;
+            let projections =
+                decode_complete_scalar_projections(spec.key, spec.continuum_id, &objects)?;
 
             let mut combined = ScalarSyncProjection::new();
             for projection in projections {
@@ -167,10 +160,8 @@ where
                     .map_err(ScalarRecoveryCatchUpError::Core)?
                 {
                     Some(mut local) => {
-                        let pre_observation_revision_id = spec
-                            .pre_observation_revision_ids
-                            .get(domain_key)
-                            .copied();
+                        let pre_observation_revision_id =
+                            spec.pre_observation_revision_ids.get(domain_key).copied();
                         if let Some(sealed) = local
                             .observe_remote(remote, pre_observation_revision_id)
                             .map_err(ScalarRecoveryCatchUpError::Core)?
@@ -432,10 +423,8 @@ mod tests {
             Some(cursor_codec.encode(&Revision(1)).unwrap()),
         );
         let mut store = MemoryStore::default();
-        let pre_observation = BTreeMap::from([
-            (body_key.clone(), rid(200)),
-            (title_key.clone(), rid(400)),
-        ]);
+        let pre_observation =
+            BTreeMap::from([(body_key.clone(), rid(200)), (title_key.clone(), rid(400))]);
 
         let outcome = catch_up_scalar_recovery_state(
             &mut recovery,
@@ -541,10 +530,7 @@ mod tests {
         );
         let before_record = record.clone();
         let mut store = MemoryStore::default();
-        let pre_observation = BTreeMap::from([
-            (body_key, rid(200)),
-            (title_key, rid(400)),
-        ]);
+        let pre_observation = BTreeMap::from([(body_key, rid(200)), (title_key, rid(400))]);
 
         let error = catch_up_scalar_recovery_state(
             &mut recovery,
