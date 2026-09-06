@@ -1,10 +1,10 @@
 # A.P.C. architecture state
 
-Status: **pre-implementation; architecture research remains active**.
+Status: **active implementation; architecture research remains active and the portable format is not frozen**.
 
-This document is the current handoff/index for A.P.C. It summarizes what is already a project invariant, what has strong executable evidence, what remains a research candidate, and what is still open. It does not replace the normative or specialist documents listed below.
+This document is the current handoff/index for A.P.C. It summarizes what is already a project invariant, what has strong executable evidence, what is implemented behind pre-format seams, what remains a research candidate, and what is still open. It does not replace the normative or specialist documents listed below.
 
-The project is sufficiently constrained to begin a real core implementation, but it is **not** ready for a portable-format freeze. Implementation must preserve open seams where research is not finished.
+A real Rust core/sync/runtime implementation now exists around the stable boundaries. Implementation and falsification research proceed in parallel. No development codec, local recovery record or current transport shape should be mistaken for a portable-format commitment.
 
 ## 1. Document authority
 
@@ -48,7 +48,7 @@ The primary UI direction is a vertically navigated text continuum, not an infini
 
 ## 3. Architectural boundaries
 
-A.P.C. is deliberately split into four semantic layers.
+A.P.C. is deliberately split into four semantic responsibility layers.
 
 ```text
 portable format
@@ -60,6 +60,8 @@ platform implementation
 transport adapter
 ```
 
+The Rust workspace currently introduces implementation strata such as `apc-sync` and `apc-runtime`. These are composition boundaries, not new owners of portable semantics: sync owns transport-independent publication/recovery mechanics and runtime composes core/sync/transport contracts for platform bindings.
+
 ### 3.1 Format
 
 The format defines portable user state plus the metadata required to interpret, authenticate and deterministically merge that state.
@@ -68,7 +70,7 @@ It is independent of Android, desktop UI, Git, GitHub, local hardware key stores
 
 ### 3.2 Core
 
-The portable core owns format parsing/writing, portable cryptography, validation, deterministic merge, import/export primitives, attachment access and generic synchronization projection interfaces.
+The portable core owns portable logical semantics, validation, deterministic merge and the format-facing cryptographic/serialization contracts. The implementation may temporarily use pre-format codecs behind explicit seams while the final byte layout remains open.
 
 The core does not require a network connection.
 
@@ -78,11 +80,13 @@ Platform code owns local unlock, host-specific key wrapping, editor/UI behavior,
 
 A platform may strengthen local protection, but it must not redefine portable cryptography or logical merge semantics.
 
+Platform-neutral runtime code may compose these contracts so Android and desktop do not duplicate failure-sensitive orchestration.
+
 ### 3.4 Transport
 
 A transport moves already-protected A.P.C. synchronization material. It does not inspect plaintext content and never performs semantic merge.
 
-GitHub is the first planned transport, not an architectural dependency.
+GitHub is the first transport implementation, not an architectural dependency.
 
 ## 4. Native continuum and physical representation
 
@@ -124,13 +128,15 @@ A title write must not erase a concurrent child insertion. A move must not rewri
 
 For valid states, logical merge must remain deterministic, commutative, associative and idempotent.
 
+The Rust core currently implements the first scalar/domain state path behind these contracts. Sequence, hierarchy and lifecycle production semantics remain replaceable modules rather than being inferred from scalar code.
+
 ## 6. Identifiers, time and causality
 
 Correctness must not depend on wall-clock time, device time, Git timestamps, server timestamps or transport arrival order.
 
 Logical identifiers are opaque identities. Their magnitude does not mean earlier or later.
 
-Current identifier classes include `ContinuumId`, `AtomId`, `ReplicaId`, `RevisionId`, `KeyStateId` and attachment/content identities. The exact final encoding remains open.
+Current identifier classes include `ContinuumId`, `AtomId`, `ReplicaId`, `RevisionId`, `WorkingEpochId` and future key/content identities. The exact final encoding remains open.
 
 Canonical unsigned lexicographic ID order may be used only where a deterministic total tie-break is explicitly required for genuinely concurrent states. Causal precedence always wins before such a tie-break.
 
@@ -142,7 +148,7 @@ The explicit-all-ancestors scalar model remains a correctness oracle but is reje
 
 The strongest current ID-only causal candidate stores direct observed frontier parents. In the executable 256-revision linear case, retained causal references fell from `32640` to `255` while the tested scalar frontier/materialization behavior remained equivalent to the explicit oracle.
 
-This is strong evidence for the representation in the tested scalar domain, not yet a proof for every merge-domain type.
+The Rust scalar implementation uses direct parent/frontier semantics for the currently implemented scalar path. This is not yet proof that the same representation is sufficient for every future merge-domain type.
 
 ### 6.2 Causal scope is merge-domain-local by default
 
@@ -166,17 +172,23 @@ portable causal state
 transport publication
 ```
 
+The first scalar Rust state machine now implements this separation through `WorkingScalar`, `LocalScalarDomain` and `FinalizationLedger`.
+
 ### 7.1 Working epochs
 
 Many locally durable edits may be coalesced inside one working epoch. A pending epoch captures the causal frontier actually observed when the work began.
 
 In the executable scalar experiment, `10000` durable local writes created no portable causal revision until sealing, then produced one revision.
 
+The Rust implementation preserves the distinction between `WorkingEpochId` and `RevisionId` and snapshots working/finalization bookkeeping together for recovery.
+
 ### 7.2 Receipt is not observation
 
 Downloading a protected remote capsule is not the same as semantically observing its content.
 
 If a remote change in the same dirty merge domain is about to become observable, the pre-remote local working epoch must first be sealed with the frontier it actually saw. The remote state is then merged. This prevents publication time from inventing false causality.
+
+`LocalScalarDomain::observe_remote()` implements the first scalar form of this boundary and registers any pre-observation sealed revision as locally owned.
 
 ### 7.3 Stable causal identity across finalization
 
@@ -195,7 +207,7 @@ protected sync material
 transport handoff
 ```
 
-Finalization freezes the authenticated statement fields. Safe private canonicalization should happen before finalization where possible.
+Finalization freezes the semantic statement fields before later cryptographic authentication. Safe private canonicalization should happen before finalization where possible.
 
 ### 7.4 Exposure boundary
 
@@ -204,6 +216,12 @@ A causal identity is conservatively considered externally exposed when a represe
 An ACK can be lost after successful remote receipt.
 
 Never-exposed dominated private causal nodes form a separate compaction class and may be squashable before finalization. Exposed causal identities require the stronger long-term compaction/checkpoint rules.
+
+The Rust finalization ledger tracks locally owned, finalized, exposed and directly handed-off identities separately. Handoff validates the transitive local dependency closure: every local causal dependency must already be finalized.
+
+The first runtime scalar bridge now clones the semantic domain, records handoff/exposure on the candidate, encodes that candidate as trusted recovery state, and durably stages the exact protected outbox before replacing the live in-memory domain. A failed durability step therefore cannot expose only volatile process state, and a crash after durable staging cannot make an already-handoff-visible identity private again on restart.
+
+The complete-continuum trusted-state codec remains open; this is a typed scalar implementation seam, not a format freeze.
 
 ## 8. Causal compaction and long-offline replicas
 
@@ -262,7 +280,7 @@ The current bounded hierarchy candidate records the parent state causally observ
 
 This gives bounded hierarchy-validity work and has a stronger causal interpretation than selecting an arbitrary surviving concurrent historical placement.
 
-It is **not yet frozen production hierarchy semantics**. More statistical/adversarial work remains, including causal-purity measurements and denser conflict shapes.
+It is **not yet frozen production hierarchy semantics**. More statistical/adversarial work remains, including denser causal-chain and invalid-witness shapes.
 
 Workstation campaign evidence currently includes:
 
@@ -283,6 +301,8 @@ A.P.C. should prefer representations where common actions are one semantic-domai
 
 The general concurrent conflict rule for truly irreducible multi-domain atomic mutations remains open.
 
+The current runtime publication bridge is deliberately scalar-domain-specific for this reason. It must not be generalized by simply declaring several independent domain updates one atomic mutation.
+
 ## 12. Synchronization architecture
 
 Synchronization is optional and does not change local-first authority.
@@ -290,13 +310,15 @@ Synchronization is optional and does not change local-first authority.
 The generic path is:
 
 ```text
-local native state
+local native / trusted state
       |
 dirty merge domains
       |
 clear A.P.C. sync projection inside trusted core/sync layer
       |
 protect / authenticate
+      |
+durable exposure + exact protected outbox
       |
 opaque protected capsule(s) / attachment chunks
       |
@@ -311,11 +333,33 @@ Multipart publication must not become semantically visible until all required pr
 
 Transport adapters operate on opaque protected objects and must not require plaintext merge-domain values for polling, publication, retry, splitting or resume.
 
+The Rust implementation now contains:
+
+- transport-independent semantic sync projections with no semantic publication ID;
+- deterministic pre-format scalar projection encoding;
+- XChaCha20-Poly1305 protected sync parts with associated-data binding;
+- authenticated multipart assembly;
+- opaque transport `head/fetch_since/publish` seam;
+- GitHub content-addressed append-only protected-object adapter with expected-head conflict handling;
+- protected durable local `DurableSyncRecord` containing trusted state, applied cursor and exact pending outbox bytes;
+- lost-ACK/unknown-outcome recovery and stale-outbox rebase transitions;
+- foreground-only transport gating;
+- platform-neutral `GitHubCommitOid` ↔ local opaque `TransportCursor` codec;
+- first typed scalar finalization/exposure-to-durable-outbox runtime bridge.
+
+Every one of the current byte codecs is explicitly pre-format unless a specialist format document later freezes it.
+
 ### 12.1 Foreground runtime
 
-The normal Android synchronization target is an in-process foreground `SyncSession`.
+The normal Android synchronization target is an in-process foreground sync session.
 
-Entering foreground triggers immediate catch-up. While foreground, the session polls/publishes adaptively. Backgrounding cancels normal polling/timers/network sync work.
+The implemented foreground gate starts closed. Explicit foreground entry enables new transport calls; background entry blocks future `head`, `fetch_since` and `publish` calls without touching durable outbox/cursor state.
+
+A request already in flight when backgrounding occurs may have an unknown external outcome. The implementation does not guess. Durable exact-byte retry plus conflict/refetch reconciliation handles remote acceptance followed by lost response.
+
+The test suite executes the sequence `remote accept -> background/cancel-like error -> blocked background retry -> foreground resume -> stale-head conflict -> refetch accepted bytes`.
+
+A concrete platform network-cancellation primitive and automatic foreground-resume catch-up orchestration are still open.
 
 No correctness property depends on a daemon, Android foreground service, WorkManager job or background worker.
 
@@ -325,13 +369,33 @@ A several-second propagation delay is acceptable; sustained typing may be coales
 
 GitHub transports opaque protected sync material. It never performs A.P.C. merge.
 
-The adapter should detect a small remote head/ref marker, fetch only newly required protected material, and use optimistic compare-and-swap / fast-forward publication. If the head changed, the client fetches missing material, merges locally, retains local pending state and retries.
+The current GitHub adapter stores complete protected objects under SHA-256-derived immutable paths and uses an injectable API contract for expected-head commit publication. Stale expected heads surface as conflict; old/nonlinear/unavailable baselines surface as explicit rebootstrap requirements.
 
-Git commit identity is transport bookkeeping only.
+Git commit identity is transport bookkeeping only. `apc-runtime::GitHubCursorCodec` stores the opaque textual identity reversibly in local crash-recovery cursor bytes without interpreting lexical or numeric order.
+
+A concrete production GitHub HTTP/GraphQL client, credentials flow and repository discovery remain open.
 
 Initial bootstrap and incremental synchronization are separate problems. Very large continua may be bootstrapped through LAN/removable media/another bulk channel and then use GitHub only for incremental protected capsules.
 
 Transport history eventually requires generations/checkpoints/retention policy. A valid very-old replica must either remain mergeable from retained state or be explicitly re-bootstrapped without silently dropping its unsynchronized edits.
+
+### 12.3 Durable publication/recovery rule
+
+Network success never advances local durable truth by itself.
+
+The durable recovery unit couples:
+
+```text
+trusted semantic/recovery state
++
+applied opaque transport cursor
++
+pending exact protected outbound publications
+```
+
+Outbound exposure/retry bytes become durable before network I/O. Incoming merged state and its applied cursor become durable together. A pending publication is retired only during durable reconciliation. If another pending publication was prepared against an older cursor, it is not mutated in place: semantic code must decide whether it is redundant or re-export/re-protect it under a fresh `PublicationId`; the stale-to-fresh outbox replacement is itself crash-atomic.
+
+This makes process/network/lifecycle failures repeat work rather than tear logical state.
 
 ## 13. Security and key architecture
 
@@ -346,7 +410,9 @@ The following responsibilities are separate:
 
 Android biometrics/Keystore/StrongBox are local protection layers, not portable content keys or portable semantics.
 
-The concrete AEAD, nonce strategy, key hierarchy, replay/rollback treatment and authentication primitive are still open and must use studied cryptography rather than ad-hoc constructions.
+The development crypto layer currently uses XChaCha20-Poly1305 for authenticated symmetric protection and binds context through associated data. This is an executable protection primitive, not yet a final portable key hierarchy or format commitment.
+
+Nonce generation, final content-key hierarchy, replay/rollback treatment, replica authentication/signatures and long-term key evolution still require the studied production construction described by the specialist security documents.
 
 ### 13.1 Replica identity and key evolution
 
@@ -399,6 +465,9 @@ The following should not be silently reintroduced during implementation:
 - network receipt as semantic observation;
 - transport acknowledgement as the first exposure boundary;
 - replacing a semantically active `RevisionId` with an arbitrary fresh ID during finalization/compaction;
+- mutating already-staged protected publication bytes or reusing a `PublicationId` for changed bytes;
+- advancing an applied transport cursor separately ahead of the durable trusted state produced from it;
+- treating cancellation/backgrounding as proof that an in-flight remote mutation failed;
 - full-history hierarchy fallback as the production default;
 - assuming atomic delivery automatically gives atomic concurrent merge semantics;
 - platform hardware keys as portable format dependencies;
@@ -416,42 +485,73 @@ The following remain deliberately unresolved:
 - final hierarchy cycle-resolution semantics and bounded fallback policy;
 - truly irreducible cross-domain atomic mutation semantics;
 - native `.apc` binary layout, indexes, integrity tree/framing and crash-safe incremental update strategy;
+- final complete-continuum local trusted-state recovery encoding;
 - attachment chunking, lazy verification, deduplication/privacy policy and large-object layout;
-- concrete AEAD, nonce/key hierarchy, replay/rollback handling;
+- final content-key/nonce hierarchy and replay/rollback handling;
 - concrete per-replica authentication/key-evolution primitive and trust/enrollment model;
 - transport checkpoint/generation retention protocol;
+- production GitHub API/auth binding;
 - compatibility negotiation and canonical cross-implementation test vectors;
 - optional future A.P.C.-level authorization/capabilities.
 
 These must remain implementation seams rather than being accidentally frozen by convenience code.
 
-## 17. What implementation may begin now
+## 17. Current implementation surface
 
-A real core implementation may begin around the already-stable boundaries:
+The real Rust implementation now covers a meaningful executable slice rather than only an architectural skeleton:
 
-- typed logical identifiers with no clock semantics;
-- `ContinuumState` / atom / merge-domain abstractions;
-- scalar causal oracle plus pluggable compact-causality representation;
-- deterministic validation and merge interfaces;
-- local durable working-state abstraction separate from portable revision finalization;
-- format/container abstraction without freezing the final byte layout;
-- portable-crypto interfaces without inventing final primitives;
-- generic clear sync projection -> protected sync object boundary;
-- transport adapter interface with no plaintext requirements;
-- attachment streaming/chunk abstraction;
-- property/adversarial test harness independent of Android and GitHub.
+```text
+apc-core
+  typed logical IDs
+  scalar causal register
+  merge/domain state
+  local working epochs
+  finalization/exposure ledger
+  crash-safe durability contract
 
-The first implementation must treat unresolved sequence, hierarchy, lifecycle-compaction, checkpoint and cryptographic mechanisms as replaceable modules behind explicit contracts.
+apc-crypto
+  authenticated symmetric protection (development primitive)
 
-UI work can proceed against these contracts, but UI behavior must not be allowed to define format semantics.
+apc-sync
+  dirty-domain projection
+  pre-format scalar sync codec
+  protected multipart publications
+  opaque transport seam
+  durable sync recovery record/outbox
+  session transitions
+  stale-outbox rebase
+  foreground gate
+
+apc-transport-github
+  opaque GitHub CAS-like protected-object transport
+
+apc-storage-fs
+  development filesystem durability backend
+  restart/integration tests
+
+apc-runtime
+  platform-neutral adapter composition
+  GitHub cursor recovery codec
+  typed scalar semantic-handoff -> durable publication bridge
+```
+
+The implementation is deliberately narrow where semantics remain open. Sequence, hierarchy, lifecycle compaction, checkpoint membership, attachment layout, signatures/key evolution and the final `.apc` container are not being guessed into production code merely to make the tree look complete.
+
+The reference model remains a falsification/oracle environment. It is not the production core and must not become the format by accident.
 
 ## 18. Immediate next work
 
-The next phase is two parallel tracks rather than "research finished":
+The next phase remains parallel implementation plus focused research, but the center of gravity has moved decisively into executable integration.
 
-1. **specification consolidation** — keep normative documents synchronized with validated results and remove stale assumptions;
-2. **core implementation** — begin the real implementation around stable contracts while continuing focused experiments on the remaining freeze blockers.
+Near-term implementation work should:
 
-The next hierarchy statistics should add causal-purity measurements: how often a fallback is the causal predecessor actually observed by the rejected move versus an unrelated historical/concurrent alternative. The campaign should continue to report witness-to-root frequency, disagreement counts and adversarial failures rather than only runtime.
+1. replace the runtime test-vault scalar trusted-state codec with a deterministic versioned development codec while keeping it explicitly pre-format;
+2. expand from one scalar trusted domain toward a complete local recovery image without pretending independent domains form a strong atomic mutation;
+3. add fetch/merge failure injection, repeated conflict/rebase cycles and longer chains of pending publications;
+4. add a cancellable platform-network boundary and foreground-resume coordinator that both reuse the same durable unknown-outcome semantics;
+5. implement the concrete GitHub API/auth binding behind the existing opaque adapter seam;
+6. introduce the first Android binding only after these process-level invariants remain green, then repeat the same crash oracle through ADB.
 
-The reference model remains a falsification/oracle environment. It is not the production core and must not be allowed to become the format by accident.
+Focused research should continue on the remaining true freeze blockers: compact long-offline causal membership, sequence/moved-anchor semantics, lifecycle/tombstone compaction, hierarchy invalid-witness/adversarial shapes, key evolution/signatures and the native container.
+
+The implementation rule remains the same: freeze only what has evidence; make everything else an explicit replaceable seam.
