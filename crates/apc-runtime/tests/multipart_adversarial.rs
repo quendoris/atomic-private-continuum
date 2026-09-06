@@ -122,6 +122,30 @@ fn identical_duplicate_part_while_pending_is_harmless() {
 }
 
 #[test]
+fn exact_part_replayed_after_completion_is_ignored() {
+    let key = ContentKey::from_bytes([0xA5; 32]);
+    let expected_domain = domain_key();
+
+    let first = encoded_part(&key, pid(11), 0, 2, rid(70), b"first");
+    let second = encoded_part(&key, pid(11), 1, 2, rid(71), b"second");
+
+    // Without fetched-range exact-wire deduplication, the trailing replay would
+    // start a fresh half-publication after the first two parts had already
+    // completed and would incorrectly make the whole range appear incomplete.
+    let decoded = decode_complete_scalar_domain_objects(
+        &key,
+        cid(1),
+        &expected_domain,
+        &[first.clone(), second, first],
+    )
+    .unwrap();
+
+    assert_eq!(decoded.len(), 1);
+    let revision_ids: BTreeSet<_> = decoded[0].revisions().map(|revision| revision.id).collect();
+    assert_eq!(revision_ids, BTreeSet::from([rid(70), rid(71)]));
+}
+
+#[test]
 fn authenticated_conflicting_duplicate_part_fails_closed() {
     let key = ContentKey::from_bytes([0xA3; 32]);
     let expected_domain = domain_key();
