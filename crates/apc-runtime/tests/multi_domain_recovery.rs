@@ -154,8 +154,14 @@ fn independent_domains_survive_protected_filesystem_restart_without_cross_domain
         recovered_body.pending().unwrap().value,
         b"body-draft-secret".to_vec()
     );
-    assert!(recovered_body.finalization().local_revision_ids().is_empty());
-    assert_eq!(recovered_body.causal().frontier_ids(), body.causal().frontier_ids());
+    assert!(recovered_body
+        .finalization()
+        .local_revision_ids()
+        .is_empty());
+    assert_eq!(
+        recovered_body.causal().frontier_ids(),
+        body.causal().frontier_ids()
+    );
 
     let recovered_title = recovered.restore_domain(&title_key).unwrap().unwrap();
     assert!(recovered_title.pending().is_none());
