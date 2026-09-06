@@ -10,6 +10,7 @@ mod catchup;
 mod publication;
 mod receive;
 mod resume;
+mod resume_cycle;
 mod trusted_state;
 
 use apc_sync::{TransportCursor, TransportCursorCodec};
@@ -30,6 +31,9 @@ pub use receive::{
 };
 pub use resume::{
     resume_single_scalar_domain, ScalarResumeError, ScalarResumeOutboxOutcome, ScalarResumeReport,
+};
+pub use resume_cycle::{
+    resume_single_scalar_domain_bounded, ScalarResumeCycleReport,
 };
 pub use trusted_state::{
     decode_local_scalar_snapshot, encode_local_scalar_snapshot, DevelopmentScalarTrustedStateCodec,
