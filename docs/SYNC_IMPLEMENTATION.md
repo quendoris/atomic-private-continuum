@@ -1,21 +1,38 @@
 # A.P.C. sync implementation
 
-Status: **first protected scalar sync path implemented; transport API and portable sync encoding are not frozen**.
+Status: **protected scalar sync, opaque transport seam, GitHub adapter, crash-consistent durable outbox/session recovery and foreground transport gating are implemented; portable sync encoding, production GitHub HTTP binding and final semantic-to-publication bridge are not frozen**.
 
-This document records the executable Rust synchronization boundary after the research model in `SYNC_EXPERIMENTS.md`. It does not replace `SYNC.md`, `SYNC_CAPSULES.md` or `GITHUB_TRANSPORT.md`.
+This document records the executable Rust synchronization boundary after the research model in `SYNC_EXPERIMENTS.md`. It does not replace `SYNC.md`, `SYNC_CAPSULES.md`, `GITHUB_TRANSPORT.md` or `DURABLE_SYNC.md`.
 
 ## 1. Repository layer
 
-The Rust workspace now contains a separate synchronization crate:
+The Rust workspace currently contains:
 
 ```text
-crates/apc-core/          semantic state and merge
-crates/apc-crypto/        authenticated symmetric protection
-crates/apc-storage-fs/    development local durability backend
-crates/apc-sync/          transport-independent protected sync projections
+crates/apc-core/              semantic state, working/finalization and merge rules
+crates/apc-crypto/            authenticated symmetric protection
+crates/apc-storage-fs/        development local durability backend
+crates/apc-sync/              transport-independent sync/session/recovery logic
+crates/apc-transport-github/  GitHub-specific opaque transport adapter
 ```
 
-`apc-sync` depends on the semantic core and protection crate. It does not import GitHub concepts or filesystem durability semantics.
+The intended dependency direction remains strict:
+
+```text
+semantic state
+      |
+sync projection / publication preparation
+      |
+AEAD protection
+      |
+durable outbox + cursor/state recovery
+      |
+OpaqueTransport
+      |
+GitHub adapter or another transport
+```
+
+GitHub code does not import clear semantic merge state. Filesystem durability does not decide merge semantics. Transport revision identities do not participate in causal ordering.
 
 ## 2. Semantic projection has no publication identity
 
@@ -30,7 +47,7 @@ SyncProjection
 
 It deliberately has no projection ID, publication ID, transport revision or timestamp.
 
-The earlier Python research model used `max(projection_id)` while merging projections. That research-only ordering leak has been removed. Publication identity now exists only in multipart/protection bookkeeping and cannot influence semantic merge.
+The earlier Python research model used `max(projection_id)` while merging projections. That research-only ordering leak has been removed. Publication identity now exists only in protection/assembly/transport bookkeeping and cannot influence semantic merge.
 
 For the first scalar implementation, `DomainKey` contains:
 
@@ -127,111 +144,170 @@ Duplicate delivery of an identical part is harmless. A conflicting authenticated
 
 For a complete publication, part projections are merged using normal semantic merge. Arrival order does not determine the user-visible result.
 
-## 7. Protected two-replica convergence
+## 7. Protected convergence and optimistic publication races
 
-The Rust integration suite now executes two independent replica state machines from the same scalar baseline.
+The Rust integration suite executes independent replica state machines from the same scalar baseline, creates concurrent changes, protects them with real XChaCha20-Poly1305 and consumes publications in opposite orders. Both sides converge to the same causal state and concurrent frontier. Neither side becomes dirty merely because it imported remote state.
 
-They make concurrent changes:
-
-```text
-base R1
-├── left  R10
-└── right R20
-```
-
-Each side exports its dirty state, protects it with real XChaCha20-Poly1305, acknowledges only its own successful publication and then receives the two protected publications in opposite orders.
-
-Both replicas finish with the same complete domain state and the same concurrent frontier:
-
-```text
-{R10, R20}
-```
-
-Neither side becomes dirty merely because it imported remote state. Transport/publication order does not affect convergence.
-
-## 8. Optimistic publication race
-
-A second Rust integration test uses an intentionally test-local in-memory CAS transport to exercise the publication race required by `GITHUB_TRANSPORT.md`.
-
-The sequence is:
+The optimistic publication race is also exercised explicitly:
 
 ```text
 A reads head R
 B reads head R
 
-A publishes protected state against R
+A publishes against R
         -> success, head RA
 
-B publishes protected state against R
+B publishes against R
         -> conflict, current head RA
 
-B fetches protected state introduced after R
+B fetches after R
 B authenticates + merges A
-B keeps its own unpublished domain dirty
-B exports current merged dirty state
-B protects a new publication
+B retains unpublished local work
+B exports/protects a retry
 B publishes against RA
         -> success, head RB
 
-A fetches protected state after RA
+A fetches after RA
 A authenticates + merges B retry
 ```
 
-The test verifies that:
+Transport revision identities are used only for fetch/CAS bookkeeping. They never decide scalar order.
 
-- a stale publication conflict does not clear B's local dirty contribution;
-- B can incorporate A while retaining its own pending publication responsibility;
-- B's retry contains sufficient state for A to converge;
-- the final domain state is equal on both replicas;
-- transport revision identities are used only for fetch/CAS bookkeeping and never for scalar ordering.
+## 8. Independent process exchange
 
-The in-memory CAS object is deliberately test-local. It is not a frozen transport trait and is not GitHub code.
+A development process worker allows protected sync bytes to cross an actual operating-system process boundary during tests.
 
-## 9. Independent process exchange
+Separate producer processes independently construct causal states and emit only AEAD-protected payload bytes. Separate merge processes consume those payloads in different orders and emit deterministic clear projection encodings for comparison.
 
-A development process worker now allows protected sync bytes to cross an actual operating-system process boundary during tests.
+The parent test verifies that exchanged payload files do not contain the known clear edit strings and that the independent merge processes produce byte-identical final projections. This remains a development harness, not a transport protocol.
 
-Two separate producer processes independently construct left and right causal states and emit only AEAD-protected payload bytes. Two further processes then start from their corresponding local states, consume the protected payloads in opposite orders, authenticate/decode/merge them and emit deterministic clear projection encodings for test comparison.
+## 9. Opaque transport seam and GitHub adapter
 
-The parent test verifies that:
+`OpaqueTransport` is now an executable transport-independent boundary with three operations:
 
-- the exchanged payload files do not contain the known clear edit strings;
-- both independent merge processes produce byte-identical deterministic final projections;
-- the recovered frontier is `{R10, R20}`;
-- materialization follows the ordinary scalar causal/tie-break rule, not process or delivery order.
+```text
+head()
+fetch_since(known_revision)
+publish(expected_revision, protected_objects)
+```
 
-This is the first process-level protected synchronization convergence test. It is still a development harness, not a transport protocol.
+Its revision type is deliberately opaque. A transport revision may be retained as a crash-recovery cursor but has no semantic ordering meaning.
 
-## 10. What is not solved by this layer
+`apc-transport-github` implements this seam. Protected wire objects are stored under content-addressed transport paths derived from SHA-256 of the complete already-protected bytes. The adapter verifies that such paths are append-only/immutable while traversing incremental commits.
 
-The current Rust sync implementation does not yet freeze or solve:
+Publication uses an expected-head CAS contract. A stale head returns `Conflict`; it never overwrites the winner. A missing/too-old/nonlinear baseline returns `BaselineUnavailable` rather than guessing that an incremental result is complete.
+
+The current `GitHubApi` remains an injectable API boundary. A concrete production HTTP/GraphQL binding and authentication flow are still open.
+
+## 10. Durable session recovery
+
+Transport success is not a local durability boundary. `DurableSyncRecord` therefore couples:
+
+```text
+trusted_state
++
+applied transport cursor
++
+pending outbound publications
+```
+
+into one crash-recovery unit.
+
+Each `DurableOutboxEntry` stores the exact already-protected wire bytes plus the transport cursor against which they were prepared. Exact bytes survive restart so a retry never re-encrypts an allegedly equivalent publication into a new transport object accidentally.
+
+The session coordinator provides:
+
+- `stage_outbound()` — persist exposure/retry material before network I/O;
+- `publish_staged()` — send only exact durable outbox bytes;
+- `fetch_from_durable_cursor()` — fetch only from the cursor paired with durable local state;
+- `commit_received()` — durably pair merged trusted state with the newly applied cursor;
+- `commit_reconciled_outbox()` — retire one named pending publication only together with durable reconciliation;
+- `commit_rebased_outbox()` — atomically replace one stale pending publication with a fresh identity/protected object set prepared against a newer cursor.
+
+A response can be lost after remote acceptance. The implementation treats that as an unknown outcome: retain outbox, retry exact bytes, use stale-head conflict as evidence to refetch, then reconcile from durable facts.
+
+`ProtectedSyncRecordStore` serializes the complete recovery record, authenticates/encrypts it, and sends only protected bytes through `commit_durable()` to the local durability backend.
+
+## 11. Overlapping pending publications
+
+The outbox may contain more than one pending publication. Reconciling one does not rewrite the others.
+
+This creates an important stale-outbox case:
+
+```text
+P1 expected R0
+P2 expected R0
+
+P1 reconciles -> durable cursor R1
+P2 remains exact bytes expected R0
+```
+
+`P2` cannot be mutated in place and its `PublicationId` cannot be reused for different protected bytes. If semantic reconciliation shows that the contribution still needs publication, the higher layer must re-export/re-protect it under a fresh `PublicationId` against `R1`. `commit_rebased_outbox()` makes replacement of the stale durable entry crash-atomic.
+
+Whether a stale entry is semantically redundant or must be rebased remains a semantic decision above transport bookkeeping.
+
+## 12. Foreground-only lifecycle boundary
+
+`ForegroundSyncLifecycle` and `ForegroundTransport<T>` encode the no-background-sync rule directly.
+
+The gate starts closed. A platform binding must explicitly enter foreground before `head`, `fetch_since` or `publish` can reach the wrapped transport. Entering background blocks all future transport calls without modifying the durable outbox or cursor.
+
+The gate intentionally does not claim that an already-running HTTP mutation can be made nonexistent. If the platform cancels a request after remote acceptance but before the response survives, the outcome is unknown and is recovered through the same durable outbox protocol.
+
+The suite exercises exactly that sequence: remote acceptance, foreground→background transition, lost response, blocked retry while backgrounded, foreground resume, stale-head conflict and refetch of the accepted bytes.
+
+No worker, daemon, alarm or background scheduler is required for correctness.
+
+## 13. Current deterministic failure coverage
+
+The executable matrix now checks at least these boundaries:
+
+- failure to persist an outbound outbox does not expose a new in-memory/network-eligible state;
+- ordinary network failure after durable staging preserves exact retry material;
+- remote acceptance followed by response loss is recovered as unknown outcome;
+- inbound merge persistence failure cannot advance only the process-local cursor;
+- reconciliation persistence failure cannot retire outbox or advance cursor;
+- reconciling one outbox entry preserves other pending entries verbatim;
+- stale-entry rebase uses a fresh `PublicationId` and one durable replacement transition;
+- failed rebase persistence restores the complete old state;
+- publication identity cannot be reused for changed protected bytes;
+- foreground/background transitions gate transport without touching semantic state;
+- background during an accepted in-flight publication remains recoverable on resume;
+- real development filesystem restart tests preserve the state/cursor/outbox pairing;
+- the GitHub adapter participates in a lost-ACK restart/reconciliation integration test.
+
+These tests establish the current Rust contracts, not real handset power-loss behavior.
+
+## 14. Still intentionally unresolved
+
+The current Rust sync implementation does not freeze or fully solve:
 
 - final compact causal/checkpoint representation;
 - baseline membership proofs for omitted historical parent bodies;
-- lifecycle/tombstone sync semantics;
-- sequence/hierarchy sync semantics;
+- final portable `.apc` encoding;
+- lifecycle/tombstone production sync semantics;
+- sequence/hierarchy production sync semantics;
 - attachment chunk reachability and protected chunk manifests;
 - content-key epoch selection inside sync envelopes;
 - replica signatures/key evolution;
 - replay/rollback policy;
-- a generic production transport trait;
-- GitHub object/commit serialization;
-- GitHub authentication or repository discovery;
-- foreground scheduling/backoff;
+- finalization/private-squashing to sync-publication preparation bridge;
+- production GitHub HTTP/GraphQL client, credentials and repository discovery;
+- cancellation of already-running platform network requests;
+- Android storage/lifecycle integration;
 - long-offline transport-generation compaction.
 
 The current scalar capsule may still carry more causal metadata than the eventual compact representation. Correctness is being established before compression.
 
-## 11. Immediate next implementation work
+## 15. Immediate next implementation work
 
-The next transport-facing slice should keep the same separation and proceed in this order:
+The next implementation slices should keep the same separation:
 
-1. define the minimum opaque transport bookkeeping required by a foreground sync session without freezing GitHub into `apc-sync`;
-2. implement GitHub optimistic head read / immutable protected-object publication / fast-forward retry as an adapter;
-3. keep all decrypt/merge/retry policy above the adapter so GitHub never sees plaintext semantics;
-4. add overlapping same-replica in-flight publication tests;
-5. add missing multipart retry/resume tests;
-6. add a foreground session scheduler with cancellation on background and immediate catch-up on resume;
-7. then measure real request counts, latency and AEAD overhead before selecting cadence constants.
+1. add a production `GitHubCommitOid` ↔ opaque local `TransportCursor` codec at the GitHub/runtime boundary;
+2. build a typed semantic finalization/exposure-to-publication preparation bridge so application glue cannot hand arbitrary exposure bytes to `stage_outbound()`;
+3. extend failure injection across fetch failure, multi-entry stale rebase chains and repeated conflict/rebase cycles;
+4. add a cancellable platform-network boundary while treating a cancelled mutation as unknown outcome unless reconciliation proves otherwise;
+5. add foreground-resume orchestration that immediately executes durable-cursor catch-up/reconciliation;
+6. carry the same test oracle onto Android through ADB before claiming handset power-loss guarantees.
 
-A.P.C. transport code should become boring by construction: move opaque authenticated objects and expose enough CAS/change-detection information for the trusted sync layer to do the real work.
+A.P.C. transport code should remain boring by construction: move opaque authenticated objects and expose enough CAS/change-detection information for trusted semantic/sync code to do the real work.
