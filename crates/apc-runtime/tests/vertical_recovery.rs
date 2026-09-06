@@ -90,8 +90,7 @@ fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_re
     let directory = TestDir::new();
     let codec = DevelopmentScalarTrustedStateCodec;
     let cursor_codec = GitHubCursorCodec;
-    let transport_head =
-        GitHubCommitOid::new("0123456789abcdef0123456789abcdef01234567").unwrap();
+    let transport_head = GitHubCommitOid::new("0123456789abcdef0123456789abcdef01234567").unwrap();
     let cursor = cursor_codec.encode(&transport_head).unwrap();
 
     let mut domain = prepared_domain();
