@@ -178,7 +178,10 @@ fn semantic_exposure_survives_real_crypto_filesystem_restart_and_exact_outbox_re
 
     let recovered_outbox = recovered_record.outbox().get(&pid(1)).unwrap();
     assert_eq!(recovered_outbox.expected_cursor(), Some(&cursor));
-    assert_eq!(recovered_outbox.objects(), &[protected_object.clone()]);
+    assert_eq!(
+        recovered_outbox.objects(),
+        std::slice::from_ref(&protected_object)
+    );
 
     let opened_publication = unprotect(
         &ContentKey::from_bytes(PUBLICATION_KEY),
