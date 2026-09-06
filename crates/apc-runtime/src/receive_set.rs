@@ -1,4 +1,4 @@
-use apc_core::{CoreError, LocalScalarDomain, RevisionId, ScalarRegister, ScalarRevision};
+use apc_core::{CoreError, RevisionId, ScalarRegister, ScalarRevision};
 use apc_sync::{
     commit_received, DomainKey, DurableSyncRecord, SessionCommitError, SyncRecordStore,
     TransportCursorCodec,
