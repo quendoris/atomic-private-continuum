@@ -91,7 +91,10 @@ impl core::fmt::Display for PendingRecoveryPublicationDecodeError {
                 write!(f, "pending publication protection error: {error}")
             }
             Self::IncompleteMultipartPublication => {
-                write!(f, "pending publication does not contain a complete multipart set")
+                write!(
+                    f,
+                    "pending publication does not contain a complete multipart set"
+                )
             }
             Self::MultipleCompletedPublications => write!(
                 f,
@@ -178,7 +181,7 @@ where
     .map_err(ScalarRecoveryResumeError::CatchUp)?;
 
     if matches!(
-        catch_up,
+        &catch_up,
         ScalarRecoveryCatchUpOutcome::BaselineUnavailable { .. }
     ) {
         return Ok(ScalarRecoveryResumeReport {
@@ -376,9 +379,7 @@ fn decode_pending_recovery_publication(
 mod tests {
     use apc_core::id::LOGICAL_ID_BYTES;
     use apc_core::{AtomId, LocalScalarDomain, ScalarRegister, WorkingEpochId};
-    use apc_sync::{
-        DomainKey, FetchOutcome, SyncRecordStore, TransportCursor,
-    };
+    use apc_sync::{DomainKey, FetchOutcome, SyncRecordStore, TransportCursor};
 
     use crate::{
         prepare_recovery_handoff, stage_prepared_recovery_handoff,
@@ -562,14 +563,8 @@ mod tests {
         )
         .unwrap();
         let accepted_objects = prepared.objects().to_vec();
-        stage_prepared_recovery_handoff(
-            &mut recovery,
-            &mut record,
-            &mut store,
-            &codec,
-            prepared,
-        )
-        .unwrap();
+        stage_prepared_recovery_handoff(&mut recovery, &mut record, &mut store, &codec, prepared)
+            .unwrap();
 
         let mut transport = ResumeTransport {
             head: Revision(2),
@@ -634,7 +629,8 @@ mod tests {
             )
             .unwrap();
         }
-        let expected_object_count: usize = record.outbox().values().map(|e| e.objects().len()).sum();
+        let expected_object_count: usize =
+            record.outbox().values().map(|e| e.objects().len()).sum();
 
         let mut transport = ResumeTransport {
             head: Revision(1),
@@ -687,14 +683,8 @@ mod tests {
             selections(&body_key, &title_key),
         )
         .unwrap();
-        stage_prepared_recovery_handoff(
-            &mut recovery,
-            &mut record,
-            &mut store,
-            &codec,
-            prepared,
-        )
-        .unwrap();
+        stage_prepared_recovery_handoff(&mut recovery, &mut record, &mut store, &codec, prepared)
+            .unwrap();
 
         let mut transport = ResumeTransport {
             head: Revision(2),
