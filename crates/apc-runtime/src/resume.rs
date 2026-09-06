@@ -225,8 +225,7 @@ mod tests {
     use apc_sync::{stage_outbound, DomainKey, FetchOutcome, SyncRecordStore, TransportCursor};
 
     use crate::{
-        prepare_scalar_handoff, stage_prepared_scalar_handoff,
-        DevelopmentScalarTrustedStateCodec,
+        prepare_scalar_handoff, stage_prepared_scalar_handoff, DevelopmentScalarTrustedStateCodec,
     };
 
     use super::*;
@@ -476,7 +475,9 @@ mod tests {
         let key = ContentKey::from_bytes([0xA3; 32]);
         let semantic_key = domain_key();
         let mut domain = domain();
-        domain.begin_epoch(wid(1), b"local-exposed".to_vec()).unwrap();
+        domain
+            .begin_epoch(wid(1), b"local-exposed".to_vec())
+            .unwrap();
         domain.seal_local(rid(200)).unwrap();
         domain.finalize(rid(200)).unwrap();
 
