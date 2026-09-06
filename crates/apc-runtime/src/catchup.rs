@@ -20,6 +20,7 @@ use crate::{
 /// is actually present and the local domain is dirty. A transport-head advance
 /// containing no A.P.C. objects therefore does not manufacture a local causal
 /// revision.
+#[derive(Clone, Copy)]
 pub struct ScalarCatchUpSpec<'a> {
     key: &'a ContentKey,
     continuum_id: ContinuumId,
@@ -40,6 +41,18 @@ impl<'a> ScalarCatchUpSpec<'a> {
             domain_key,
             pre_observation_revision_id,
         }
+    }
+
+    pub fn key(&self) -> &'a ContentKey {
+        self.key
+    }
+
+    pub fn continuum_id(&self) -> ContinuumId {
+        self.continuum_id
+    }
+
+    pub fn domain_key(&self) -> &'a DomainKey {
+        self.domain_key
     }
 }
 
