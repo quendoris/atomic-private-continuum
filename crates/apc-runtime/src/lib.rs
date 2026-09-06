@@ -6,8 +6,15 @@
 //! adapter composition that should be shared by Android and desktop without
 //! becoming portable format semantics.
 
+mod publication;
+
 use apc_sync::{TransportCursor, TransportCursorCodec};
 use apc_transport_github::GitHubCommitOid;
+
+pub use publication::{
+    recover_scalar_domain, stage_scalar_handoff, ProtectedPublication, ScalarHandoffStageError,
+    ScalarRecoveryError, TrustedStateCodec,
+};
 
 /// Reversible local crash-recovery codec for GitHub transport revisions.
 ///
