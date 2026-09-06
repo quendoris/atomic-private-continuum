@@ -1,11 +1,10 @@
 use apc_core::{LocalScalarDomain, LocalScalarSnapshot};
-use apc_sync::{OpaqueTransport, SyncRecordStore, TransportCursorCodec};
+use apc_sync::{DurableSyncRecord, OpaqueTransport, SyncRecordStore, TransportCursorCodec};
 
 use crate::{
     resume_single_scalar_domain, ScalarCatchUpSpec, ScalarResumeError, ScalarResumeOutboxOutcome,
     ScalarResumeReport, TrustedStateCodec,
 };
-use apc_sync::DurableSyncRecord;
 
 /// Result of one bounded foreground resume cycle.
 ///
@@ -59,7 +58,10 @@ where
         catch_up_spec,
     )?;
 
-    if !matches!(initial.outbox, ScalarResumeOutboxOutcome::Conflict { .. }) {
+    if !matches!(
+        &initial.outbox,
+        ScalarResumeOutboxOutcome::Conflict { .. }
+    ) {
         return Ok(ScalarResumeCycleReport {
             initial,
             post_conflict: None,
@@ -85,13 +87,9 @@ where
 #[cfg(test)]
 mod tests {
     use apc_core::id::LOGICAL_ID_BYTES;
-    use apc_core::{
-        AtomId, ContinuumId, RevisionId, ScalarRegister, WorkingEpochId,
-    };
+    use apc_core::{AtomId, ContinuumId, RevisionId, ScalarRegister, WorkingEpochId};
     use apc_crypto::ContentKey;
-    use apc_sync::{
-        DomainKey, FetchOutcome, PublicationId, PublishOutcome, TransportCursor,
-    };
+    use apc_sync::{DomainKey, FetchOutcome, PublicationId, PublishOutcome, TransportCursor};
 
     use crate::{
         prepare_scalar_handoff, stage_prepared_scalar_handoff,
