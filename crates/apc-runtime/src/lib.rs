@@ -28,8 +28,9 @@ pub use publication::{
     ScalarPublicationPrepareError, ScalarRecoveryError, TrustedStateCodec,
 };
 pub use receive::{
-    commit_received_scalar_domain, decode_single_scalar_domain_object, ReceivedScalarState,
-    ScalarObjectDecodeError, ScalarReceiveCommitError, ScalarReceiveResult,
+    commit_received_scalar_domain, decode_complete_scalar_domain_objects,
+    decode_single_scalar_domain_object, ReceivedScalarState, ScalarObjectDecodeError,
+    ScalarReceiveCommitError, ScalarReceiveResult,
 };
 pub use resume::{
     resume_single_scalar_domain, ScalarResumeError, ScalarResumeOutboxOutcome, ScalarResumeReport,
