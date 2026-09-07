@@ -41,7 +41,7 @@ fn is_foreground() -> bool {
 /// loaded the Rust library it intended to load.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nativeVersion(
-    mut env: JNIEnv<'_>,
+    env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jstring {
     match env.new_string(BRIDGE_VERSION) {
