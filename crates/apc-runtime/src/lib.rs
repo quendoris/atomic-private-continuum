@@ -8,6 +8,7 @@
 
 mod catchup;
 mod catchup_set;
+mod foreground_recovery;
 mod publication;
 mod publication_set;
 mod receive;
@@ -31,6 +32,9 @@ pub use catchup::{
 pub use catchup_set::{
     catch_up_scalar_recovery_state, ScalarRecoveryCatchUpError, ScalarRecoveryCatchUpOutcome,
     ScalarRecoveryCatchUpResult, ScalarRecoveryCatchUpSpec,
+};
+pub use foreground_recovery::{
+    ForegroundRecoveryCycleResult, ForegroundRecoveryCycleSpec, ForegroundRecoveryRuntime,
 };
 pub use publication::{
     prepare_scalar_handoff, recover_scalar_domain, stage_prepared_scalar_handoff,
