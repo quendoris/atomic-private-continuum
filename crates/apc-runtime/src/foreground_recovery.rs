@@ -74,21 +74,16 @@ impl<T> ForegroundRecoveryRuntime<T> {
     }
 }
 
-pub type ForegroundRecoveryCycleResult<
-    R,
-    TransportError,
-    TrustedError,
-    StoreError,
-    CursorError,
-> = Result<
-    ScalarRecoveryResumeCycleReport<R>,
-    ScalarRecoveryResumeError<
-        ForegroundTransportError<TransportError>,
-        TrustedError,
-        StoreError,
-        CursorError,
-    >,
->;
+pub type ForegroundRecoveryCycleResult<R, TransportError, TrustedError, StoreError, CursorError> =
+    Result<
+        ScalarRecoveryResumeCycleReport<R>,
+        ScalarRecoveryResumeError<
+            ForegroundTransportError<TransportError>,
+            TrustedError,
+            StoreError,
+            CursorError,
+        >,
+    >;
 
 impl<T> ForegroundRecoveryRuntime<T>
 where
@@ -110,13 +105,7 @@ where
         trusted_codec: &TC,
         cursor_codec: &CC,
         spec: ForegroundRecoveryCycleSpec<'_>,
-    ) -> ForegroundRecoveryCycleResult<
-        T::Revision,
-        T::Error,
-        TC::Error,
-        S::Error,
-        CC::Error,
-    >
+    ) -> ForegroundRecoveryCycleResult<T::Revision, T::Error, TC::Error, S::Error, CC::Error>
     where
         S: SyncRecordStore,
         TC: TrustedStateCodec<LocalScalarRecoveryState>,
