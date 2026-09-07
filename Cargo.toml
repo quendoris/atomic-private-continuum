@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/apc-android-bridge",
     "crates/apc-core",
     "crates/apc-crypto",
     "crates/apc-runtime",
