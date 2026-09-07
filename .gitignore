@@ -1,0 +1,9 @@
+/target/
+
+# Android harness local/generated state
+/android/harness/.gradle/
+/android/harness/.idea/
+/android/harness/build/
+/android/harness/app/build/
+/android/harness/app/src/main/jniLibs/
+/android/harness/local.properties
