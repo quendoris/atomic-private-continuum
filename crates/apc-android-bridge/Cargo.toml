@@ -1,0 +1,14 @@
+[package]
+name = "apc-android-bridge"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Narrow Android JNI lifecycle bridge for Atomic Private Continuum"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+apc-sync = { path = "../apc-sync" }
+jni = "0.21.1"
