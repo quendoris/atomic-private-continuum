@@ -138,9 +138,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use apc_sync::{
-        FetchOutcome, PublishOutcome, ScalarRecoveryErrorPlaceholder, TransportCursor,
-    };
+    use apc_sync::{FetchOutcome, PublishOutcome, TransportCursor};
 
     use crate::{
         DevelopmentMultiScalarTrustedStateCodec, ScalarRecoveryCatchUpOutcome,
