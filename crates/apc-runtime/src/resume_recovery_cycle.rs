@@ -29,7 +29,7 @@ pub struct ScalarRecoveryResumeCycleReport<R> {
 /// conflicts, exactly one additional pass may fetch/authenticate the competing
 /// transport state and reclassify the still-durable outbox from facts. There is
 /// deliberately no conflict loop and no publication-ID priority.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn resume_scalar_recovery_outbox_set_bounded<T, S, TC, CC>(
     recovery: &mut LocalScalarRecoveryState,
     record: &mut DurableSyncRecord,
