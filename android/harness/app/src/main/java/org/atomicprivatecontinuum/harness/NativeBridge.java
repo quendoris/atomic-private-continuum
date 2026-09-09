@@ -13,6 +13,8 @@ public final class NativeBridge {
     private static native boolean nativeIsForeground();
     private static native String nativeStageRecoveryProbe(String filesDir);
     private static native String nativeVerifyRecoveryProbe(String filesDir);
+    private static native String nativeStageLostAckProbe(String filesDir);
+    private static native String nativeResumeLostAckProbe(String filesDir);
 
     public static String version() {
         return nativeVersion();
@@ -36,5 +38,13 @@ public final class NativeBridge {
 
     public static String verifyRecoveryProbe(String filesDir) {
         return nativeVerifyRecoveryProbe(filesDir);
+    }
+
+    public static String stageLostAckProbe(String filesDir) {
+        return nativeStageLostAckProbe(filesDir);
+    }
+
+    public static String resumeLostAckProbe(String filesDir) {
+        return nativeResumeLostAckProbe(filesDir);
     }
 }
