@@ -4,8 +4,8 @@
 //!
 //! Portable semantics, durability and synchronization remain in the existing
 //! Rust crates. This crate translates Android process/lifecycle calls into the
-//! foreground-only synchronization gate and exposes a development-only encrypted
-//! recovery probe for ADB process-death testing.
+//! foreground-only synchronization gate and exposes development-only encrypted
+//! recovery probes for ADB process-death testing.
 //!
 //! Unlike the portable crates, this FFI boundary cannot forbid every use of an
 //! unsafe attribute: exporting stable JNI symbol names requires `no_mangle`.
@@ -61,6 +61,16 @@ fn probe_result_string(env: &JNIEnv<'_>, result: Result<String, String>) -> jstr
         Ok(value) => value.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
+}
+
+fn foreground_probe_path(
+    env: &mut JNIEnv<'_>,
+    files_dir: &JString<'_>,
+) -> Result<PathBuf, String> {
+    if !is_foreground() {
+        return Err("transport recovery probe refused before Android foreground entry".to_owned());
+    }
+    java_path(env, files_dir)
 }
 
 /// Return a small bridge identity so the Android harness can prove that the APK
@@ -123,7 +133,7 @@ pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nati
 }
 
 /// Reopen, authenticate, decode and validate the recovery state written by a
-/// previous process. This is the ADB force-stop/restart observation point.
+/// previous process. This is the basic ADB force-stop/restart observation point.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nativeVerifyRecoveryProbe(
     mut env: JNIEnv<'_>,
@@ -131,6 +141,33 @@ pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nati
     files_dir: JString<'_>,
 ) -> jstring {
     let result = java_path(&mut env, &files_dir).and_then(|path| recovery_probe::verify(&path));
+    probe_result_string(&env, result)
+}
+
+/// Durably stage a real protected outbox, let the simulated opaque transport
+/// accept it, then deliberately lose the response. Android must already have
+/// opened the foreground gate before this transport mutation may run.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nativeStageLostAckProbe(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    files_dir: JString<'_>,
+) -> jstring {
+    let result = foreground_probe_path(&mut env, &files_dir)
+        .and_then(|path| recovery_probe::stage_lost_ack(&path));
+    probe_result_string(&env, result)
+}
+
+/// After process death, reopen the exact durable outbox and use authenticated
+/// refetch to prove the previous transport acceptance without publishing again.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nativeResumeLostAckProbe(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    files_dir: JString<'_>,
+) -> jstring {
+    let result = foreground_probe_path(&mut env, &files_dir)
+        .and_then(|path| recovery_probe::resume_lost_ack(&path));
     probe_result_string(&env, result)
 }
 
