@@ -3,17 +3,21 @@
 //! Narrow Android/JNI boundary for A.P.C.
 //!
 //! Portable semantics, durability and synchronization remain in the existing
-//! Rust crates. This crate only translates Android process/lifecycle calls into
-//! the foreground-only synchronization gate.
+//! Rust crates. This crate translates Android process/lifecycle calls into the
+//! foreground-only synchronization gate and exposes a development-only encrypted
+//! recovery probe for ADB process-death testing.
 //!
 //! Unlike the portable crates, this FFI boundary cannot forbid every use of an
 //! unsafe attribute: exporting stable JNI symbol names requires `no_mangle`.
 //! There are deliberately no unsafe blocks in this crate.
 
+mod recovery_probe;
+
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use apc_sync::ForegroundSyncLifecycle;
-use jni::objects::JClass;
+use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
@@ -35,6 +39,28 @@ fn enter_background() {
 
 fn is_foreground() -> bool {
     lifecycle().is_foreground()
+}
+
+fn java_path(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Result<PathBuf, String> {
+    let text: String = env
+        .get_string(value)
+        .map_err(|error| format!("read Android filesDir: {error}"))?
+        .into();
+    if text.is_empty() {
+        return Err("Android filesDir is empty".to_owned());
+    }
+    Ok(PathBuf::from(text))
+}
+
+fn probe_result_string(env: &JNIEnv<'_>, result: Result<String, String>) -> jstring {
+    let text = match result {
+        Ok(message) => message,
+        Err(error) => format!("FAIL {error}"),
+    };
+    match env.new_string(text) {
+        Ok(value) => value.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Return a small bridge identity so the Android harness can prove that the APK
@@ -82,6 +108,30 @@ pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nati
     } else {
         JNI_FALSE
     }
+}
+
+/// Build and durably stage one real protected scalar recovery state under the
+/// Android app-private files directory. No transport I/O occurs in this probe.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nativeStageRecoveryProbe(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    files_dir: JString<'_>,
+) -> jstring {
+    let result = java_path(&mut env, &files_dir).and_then(|path| recovery_probe::stage(&path));
+    probe_result_string(&env, result)
+}
+
+/// Reopen, authenticate, decode and validate the recovery state written by a
+/// previous process. This is the ADB force-stop/restart observation point.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_atomicprivatecontinuum_harness_NativeBridge_nativeVerifyRecoveryProbe(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    files_dir: JString<'_>,
+) -> jstring {
+    let result = java_path(&mut env, &files_dir).and_then(|path| recovery_probe::verify(&path));
+    probe_result_string(&env, result)
 }
 
 #[cfg(test)]
