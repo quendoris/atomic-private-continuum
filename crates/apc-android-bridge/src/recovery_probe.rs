@@ -9,8 +9,8 @@ use apc_core::{
 use apc_crypto::ContentKey;
 use apc_runtime::{
     prepare_recovery_handoff, stage_prepared_recovery_handoff,
-    DevelopmentMultiScalarTrustedStateCodec, ForegroundRecoveryCycleSpec, ForegroundRecoveryRuntime,
-    LocalScalarRecoveryState, TrustedStateCodec,
+    DevelopmentMultiScalarTrustedStateCodec, ForegroundRecoveryCycleSpec,
+    ForegroundRecoveryRuntime, LocalScalarRecoveryState, TrustedStateCodec,
 };
 use apc_storage_fs::{FsStorageError, UnixFsDurabilityBackend};
 use apc_sync::{
@@ -300,7 +300,9 @@ impl core::fmt::Display for ProbeTransportError {
         match self {
             Self::Storage(error) => write!(f, "probe transport storage error: {error}"),
             Self::InvalidState(error) => write!(f, "invalid probe transport state: {error}"),
-            Self::LostAcceptedResponse => write!(f, "simulated response loss after remote acceptance"),
+            Self::LostAcceptedResponse => {
+                write!(f, "simulated response loss after remote acceptance")
+            }
         }
     }
 }
@@ -449,9 +451,9 @@ fn decode_remote_state(bytes: &[u8]) -> Result<ProbeRemoteState, ProbeTransportE
         let len = usize::try_from(read_u64(bytes, &mut offset)?).map_err(|_| {
             ProbeTransportError::InvalidState("object length overflows usize".to_owned())
         })?;
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| ProbeTransportError::InvalidState("object offset overflow".to_owned()))?;
+        let end = offset.checked_add(len).ok_or_else(|| {
+            ProbeTransportError::InvalidState("object offset overflow".to_owned())
+        })?;
         let object = bytes
             .get(offset..end)
             .ok_or_else(|| ProbeTransportError::InvalidState("truncated object".to_owned()))?;
@@ -526,9 +528,7 @@ pub fn stage_lost_ack(files_dir: &Path) -> Result<String, String> {
     validate_pending_committed(&durable)?;
 
     let remote = load_remote(files_dir)?;
-    if remote.head != PROBE_ACCEPTED_HEAD
-        || remote.publish_count != 1
-        || remote.objects.is_empty()
+    if remote.head != PROBE_ACCEPTED_HEAD || remote.publish_count != 1 || remote.objects.is_empty()
     {
         return Err("simulated remote did not durably accept exactly one publication".to_owned());
     }
