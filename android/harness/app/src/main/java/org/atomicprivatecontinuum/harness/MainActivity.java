@@ -2,19 +2,24 @@ package org.atomicprivatecontinuum.harness;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public final class MainActivity extends Activity {
+    private static final String TAG = "APC-HARNESS";
+
     private TextView status;
     private boolean gateBeforeOnStart;
+    private String probeResult = "not requested";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         gateBeforeOnStart = NativeBridge.isForeground();
+        runRequestedProbe();
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -55,6 +60,26 @@ public final class MainActivity extends Activity {
         super.onStop();
     }
 
+    private void runRequestedProbe() {
+        String command = getIntent().getStringExtra("apc_probe");
+        if (command == null) {
+            return;
+        }
+
+        String filesDir = getFilesDir().getAbsolutePath();
+        switch (command) {
+            case "stage":
+                probeResult = NativeBridge.stageRecoveryProbe(filesDir);
+                break;
+            case "verify":
+                probeResult = NativeBridge.verifyRecoveryProbe(filesDir);
+                break;
+            default:
+                probeResult = "FAIL unknown apc_probe command: " + command;
+                break;
+        }
+    }
+
     private void render(String event) {
         if (status == null) {
             return;
@@ -63,7 +88,9 @@ public final class MainActivity extends Activity {
         String text = "bridge: " + NativeBridge.version()
                 + "\nprocess gate before onStart: " + gateBeforeOnStart
                 + "\nprocess gate now: " + NativeBridge.isForeground()
+                + "\nrecovery probe: " + probeResult
                 + "\nlast lifecycle event: " + event;
         status.setText(text);
+        Log.i(TAG, text.replace('\n', '|'));
     }
 }
