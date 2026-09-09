@@ -1,6 +1,6 @@
 # A.P.C. durable synchronization recovery
 
-Status: **transport-independent crash recovery, protected durable record storage, foreground transport gating, scalar foreground-resume orchestration, set-based multi-publication resume, bounded conflict follow-up, complete authenticated multipart durable-cursor catch-up, session/reconciliation/rebase transitions, deterministic scalar trusted-state recovery and typed outbound/inbound semantic boundaries are implemented; Android power-loss behavior and final portable/local encodings remain unfrozen**.
+Status: **transport-independent crash recovery, protected durable record storage, foreground transport gating, multi-domain foreground-resume orchestration, set-based multi-publication resume, bounded conflict follow-up, complete authenticated multipart durable-cursor catch-up, session/reconciliation/rebase transitions, deterministic trusted-state recovery, typed outbound/inbound semantic boundaries and a JNI/Android process-death recovery harness are implemented; actual handset power-loss behavior and final portable/local encodings remain unfrozen**.
 
 This document records the local durability rules between semantic state and an opaque transport such as GitHub. It supplements `SYNC.md`, `SYNC_CAPSULES.md`, `DURABILITY.md`, `CORE_IMPLEMENTATION.md` and `SYNC_IMPLEMENTATION.md`.
 
@@ -98,10 +98,13 @@ LocalScalarSnapshot
 
 Both encode and decode validate through `LocalScalarDomain::restore()`. Invalid working frontiers or inconsistent finalization/exposure bookkeeping fail closed.
 
+The complete current runtime recovery path uses `DevelopmentMultiScalarTrustedStateCodec` / `APCLSET1` to hold several independent scalar merge domains in one physical recovery image. One physical crash-atomic blob does not make those domains one semantic transaction and does not create cross-domain causality.
+
 The distinction is important:
 
 ```text
 APCLREC1   local scalar trusted-state recovery framing
+APCLSET1   multi-domain local recovery container
 APCSREC1   durable sync record framing
 APCSYNC1   clear scalar sync-projection framing
 APCSPRT1   protected sync-part wire framing
@@ -150,25 +153,9 @@ The builder first performs the semantic `handoff()` rule on a clone, proving eve
 
 The resulting `PreparedScalarHandoff` couples the direct selected `RevisionId`s and exact protected wire bytes.
 
-`stage_prepared_scalar_handoff()` then performs:
+The multi-domain path applies the same rule through `prepare_recovery_handoff()` and `stage_prepared_recovery_handoff()` so exposure bookkeeping and exact retry bytes become durable together with the complete local recovery container.
 
-```text
-clone live LocalScalarDomain
-        |
-candidate.handoff(prepared RevisionIds)
-        |
-encode exposed APCLREC1 snapshot
-        |
-stage_outbound(exposed trusted state, exact prepared bytes)
-        |
-commit protected DurableSyncRecord
-        |
-LOCAL DURABILITY BARRIER
-        |
-replace live domain
-```
-
-If handoff validation, trusted-state encoding or persistence fails, the live semantic domain and durable sync record remain unchanged.
+If handoff validation, trusted-state encoding or persistence fails, the live semantic state and durable sync record remain unchanged.
 
 If the process dies after persistence but before the final RAM assignment, restart recovers the already-exposed semantic snapshot from the same durable unit that contains the exact outbox bytes.
 
@@ -206,7 +193,7 @@ response lost
 
 The local outbox remains durable at `R0`. Retry against `R0` may return conflict; fetch from the durable cursor then rediscovers the accepted protected object. Reconciliation decides the outcome from observable state rather than from an ACK guess.
 
-`catch_up_single_scalar_domain()` reports `RevisionId`s proven to have arrived in authenticated remote scalar state during the exact catch-up pass. The runtime may retire a stale pending scalar publication without another transport mutation only when the complete causal revision set carried by that publication is a subset of those newly authenticated remote IDs.
+Catch-up reports `RevisionId`s proven to have arrived in authenticated remote state during the exact catch-up pass, grouped by semantic merge domain in the multi-domain path. The runtime may retire a stale pending publication without another transport mutation only when every carried causal revision in every carried domain is present in that fresh authenticated evidence.
 
 Merely finding the same `RevisionId` in already-local state is not enough. The proof is transport-observation evidence from the exact authenticated catch-up.
 
@@ -243,11 +230,11 @@ P2 @ R1
 
 A successful batch transport call does not itself erase any outbox entry. `commit_reconciled_outbox_batch()` durably retires a selected publication set with one cursor/trusted-state persistence barrier. Its transition is clone-persist-swap: unknown membership, cursor encoding failure or durability failure leaves the caller's complete old record unchanged. Unselected outbox entries are preserved.
 
-The batch is transport coalescing, not a semantic multi-domain transaction. It does not assert that all carried merge-domain changes form one indivisible application operation.
+The batch is transport coalescing, not a semantic multi-domain transaction.
 
 ### 7.2 Set-based runtime resume
 
-`resume_scalar_outbox_set()` lifts those primitives into the scalar runtime without inventing ID order.
+`resume_scalar_recovery_outbox_set()` lifts those primitives into the complete multi-domain scalar recovery runtime without inventing ID order.
 
 After catch-up it classifies the initially pending outbox strictly by equality with the resulting durable cursor:
 
@@ -264,7 +251,7 @@ new durable applied_cursor = R
 
 No cursor bytes are numerically or lexicographically compared.
 
-For the stale set, authenticated catch-up evidence is checked publication-by-publication. Every stale single-part scalar publication whose full causal closure is proven present in the authenticated remote state is retired as part of one durable reconciliation set.
+For the stale set, authenticated catch-up evidence is checked publication-by-publication and domain-by-domain. Every stale publication whose full carried causal closure is proven present in authenticated remote state may be retired as part of one durable reconciliation set.
 
 If any stale publication remains unresolved, the cycle returns:
 
@@ -331,23 +318,15 @@ replace live semantic state
 
 `commit_received()` couples opaque trusted bytes and the new cursor in one clone-persist-swap transition.
 
-`commit_received_scalar_domain()` adds the semantic side of that boundary. `ReceivedScalarState` bundles:
-
-```text
-authenticated remote ScalarRegister
-pre-observation RevisionId if dirty local work must be sealed
-new transport head
-```
-
-The function clones the live domain, invokes `observe_remote()` on the candidate, encodes the candidate trusted snapshot, commits that snapshot and new cursor together, and only then replaces the live domain.
+The multi-domain catch-up supplies pre-observation local `RevisionId`s keyed by merge domain. Remote state touching one domain may seal dirty local work only in that exact domain; an unrelated dirty domain remains unsealed.
 
 This directly protects the working-state invariant established by the research model. A local epoch that began while only frontier `F0` was visible cannot later claim newly received revision `R` as its causal parent merely because synchronization happened before publication.
 
-On persistence failure the live domain remains dirty, the pre-observation local revision is absent from live causal state, and the old cursor remains durable.
+On persistence failure the live recovery state remains unchanged and the old cursor remains durable.
 
 ## 9. Multipart inbound visibility
 
-`MultipartInbox` authenticates parts and exposes a projection only after every declared part of that publication has arrived. `decode_complete_scalar_domain_objects()` now lifts that primitive to one fetched transport range.
+`MultipartInbox` authenticates parts and exposes a projection only after every declared part of that publication has arrived. The complete fetched-range decoder lifts that primitive to one fetched transport range.
 
 The durable-cursor rule is:
 
@@ -365,10 +344,10 @@ any publication incomplete?
     yes             no
      |               |
  fail closed       merge all complete
-     |             authenticated scalar state
+     |             authenticated state
  state unchanged      |
  cursor stays R0      |
-                    one semantic observation
+                    semantic observation
                         |
                     one durability barrier
                         |
@@ -377,11 +356,9 @@ any publication incomplete?
 
 The multipart inbox is intentionally ephemeral at this stage. An incomplete fetched range is not persisted as half-assembled semantic state; the old durable cursor remains authoritative so the same range can be fetched again later. A complete publication that happens to share a range with an incomplete publication is discarded with the failed candidate rather than becoming visible early.
 
-Parts may arrive in any order. Complete multipart publications may be interleaved. All fully assembled scalar registers are merged before the single semantic observation boundary, so transport completion order cannot become causal order and a dirty local working epoch is sealed at most once for the range.
+Parts may arrive in any order. Complete multipart publications may be interleaved. All fully assembled state is merged before semantic observation, so transport completion order cannot become causal order and a dirty local working epoch is sealed at most once per touched domain for the range.
 
 Identical duplicate parts while a publication is still pending are harmless. An authenticated conflicting duplicate for the same publication/part slot fails closed with `MultipartPartCollision`. The current exact-byte retry contract still requires a publication identity to retain its original protected bytes; re-protection or semantic replacement uses a fresh `PublicationId`.
-
-`decode_single_scalar_domain_object()` remains as the intentionally narrow inverse for code paths that require exactly one complete single-part publication. Durable catch-up itself now uses the complete range assembler.
 
 ## 10. Protected durable record store
 
@@ -435,20 +412,19 @@ LocalScalarDomain
 → ScalarSyncProjection
 → XChaCha20-Poly1305 sync protection
 → APCSPRT1 wire
-→ PreparedScalarHandoff
-→ exposed APCLREC1 trusted state + exact outbox
+→ exposed trusted state + exact outbox
 → APCSREC1
 → XChaCha20-Poly1305 local recovery protection
 → UnixFsDurabilityBackend
 → close/reopen
 → decrypt record
-→ decode APCLREC1
-→ restore LocalScalarDomain
+→ decode trusted state
+→ restore semantic state
 → recover exact outbox wire
 → decode + authenticate publication
 ```
 
-After reopen the test verifies that finalized/exposed/handoff bookkeeping, pending local working state, applied cursor and exact protected retry bytes survived together. Raw committed filesystem bytes are checked not to contain selected known plaintext strings or the clear `APCLREC1` marker.
+After reopen the test verifies that finalized/exposed/handoff bookkeeping, working state, applied cursor and exact protected retry bytes survived together.
 
 ### 12.2 Inbound dirty-observation restart
 
@@ -471,36 +447,29 @@ with neither revision an ancestor of the other, and the newer transport cursor s
 
 ### 12.3 Lost ACK and second durability barrier
 
-The single-publication restart path stages an exposed publication, simulates remote acceptance followed by process death before acknowledgement handling, reopens the protected Unix store, catches up from the durable cursor, rediscovers the accepted publication through authenticated state, retires the outbox without a second publish, then reopens again and verifies the reconciled result.
+The restart path stages an exposed publication, simulates remote acceptance followed by process death before acknowledgement handling, reopens the protected Unix store, catches up from the durable cursor, rediscovers the accepted publication through authenticated state, retires the outbox without a second publish, then reopens again and verifies the reconciled result.
 
 A separate failure test forces the later outbox-retirement durability barrier to fail. The first caught-up `{trusted state, new cursor, pending outbox}` record remains authoritative; the outbox cannot disappear only from RAM.
 
 ### 12.4 Accepted batch + failed local reconciliation
 
-The set-based recovery test covers the analogous multi-publication boundary:
-
-```text
-P1 @ R1 ─┐
-P2 @ R1 ─┴─> one batch publish
-              |
-              remote accepts -> R2
-              |
-              local batch-retirement persist fails
-```
-
-After that failure, the local recovery record is still exactly the old durable `{cursor R1, P1, P2}` state although transport is already at `R2`.
-
-The next resume fetches the accepted protected objects from `R1 -> R2`, authenticates them, proves the complete causal closures for both pending publications, advances semantic state/cursor durably and retires both publications as one observed set. The transport publish call count remains one: recovery does not send either publication again.
+The set-based recovery test covers the analogous multi-publication boundary. After remote acceptance followed by failed local reconciliation, the local recovery record remains the old durable cursor plus every exact pending publication. The next resume authenticates the accepted objects, advances state/cursor durably and retires the proven set without a second publish.
 
 ### 12.5 Multipart range atomicity
 
-The multipart catch-up tests cover both sides of the range boundary.
+The multipart catch-up tests cover both sides of the range boundary. Reversed part order and interleaved complete publications converge before one semantic observation boundary. A complete publication beside an incomplete one causes no semantic mutation or cursor advance. Identical duplicate pending parts are harmless; authenticated conflicting duplicates fail closed.
 
-A two-part publication arriving in reverse part order authenticates and assembles before observation. With a dirty local epoch, all remote state is merged first and the local epoch is sealed once against its captured pre-remote frontier.
+### 12.6 Android/JNI development recovery probes
 
-The inverse test places one complete publication beside one incomplete multipart publication in the same fetched range. The decoder reports the incomplete publication, the otherwise complete publication remains semantically invisible, the dirty local epoch remains dirty, no remote revision is inserted, the durability store is untouched and the durable cursor does not advance.
+`apc-android-bridge` now exposes two restartable ADB scenarios on top of the same Rust durability/runtime machinery.
 
-Additional adversarial assembly tests interleave two complete multipart publications in an order deliberately unrelated to their `PublicationId` byte ordering, accept an identical duplicate part while pending, and reject an authenticated conflicting duplicate part.
+The basic `stage -> force-stop -> verify` path writes a real exposed multi-domain trusted state and exact protected outbox through `ProtectedSyncRecordStore<UnixFsDurabilityBackend>` under Android app-private `filesDir`. `verify` opens that store from a fresh process, authenticates/decrypts it, decodes the trusted state and checks the cursor, handoff/exposure markers and exact pending wire object.
+
+The stronger `lost-ack-stage -> force-stop -> lost-ack-resume` path uses a harness-only `OpaqueTransport` whose remote state is itself durably persisted. `lost-ack-stage` lets the remote accept the exact protected object, durably increments a publish counter, and then deliberately loses the response. The local store remains at the old cursor with the outbox pending. After process death, `lost-ack-resume` refetches the already accepted protected object, authenticates it, reconciles the stale outbox and requires the durable remote publish counter to remain exactly `1`.
+
+The host Rust suite runs both probe sequences against real Unix filesystem backends and is green. That proves the probe logic and host filesystem path only. A checked-in APK/JNI harness makes the same routines available for ADB, but a physical-device pass must be collected separately before Android process-death behavior is claimed as observed evidence.
+
+The probe's fixed symmetric key, local simulated remote framing and storage locations are test fixtures only. They are not production Android security or portable format decisions.
 
 ## 13. Foreground-only transport gate and bounded resume
 
@@ -508,29 +477,9 @@ Additional adversarial assembly tests interleave two complete multipart publicat
 
 Entering background blocks future transport I/O without touching semantic state, cursor or outbox. An already-running mutation may already have succeeded remotely; its outcome remains unknown and is recovered from durable facts.
 
-The narrow single-publication orchestration remains available as `resume_single_scalar_domain()` and `resume_single_scalar_domain_bounded()`.
+`ForegroundRecoveryRuntime<T>` composes the complete multi-domain recovery/outbox cycle above that gate. The first pass may perform one equal-cursor set publication. A CAS conflict permits exactly one further catch-up/reclassification pass; there is deliberately no unbounded conflict loop.
 
-The multi-publication path is now:
-
-```text
-resume_scalar_outbox_set()
-        |
-catch-up
-        |
-reconcile stale entries proven observed
-        |
-unresolved stale set? -> NeedsRebase, stop
-        |
-current equal-cursor set
-        |
-one exact-byte batch publish
-        |
-durable batch retirement
-```
-
-`resume_scalar_outbox_set_bounded()` adds exactly one follow-up set-based resume pass after a batch CAS conflict. There is deliberately no `while conflict` loop. One foreground callback can therefore do at most one initial batch publication attempt plus one catch-up/reclassification pass.
-
-A conflict test stages two entries in reverse `PublicationId` order, publishes them as one set, injects a remote head advance, performs exactly one follow-up catch-up, then stops with both entries in `NeedsRebase`. It performs two fetches and one publish; no ID becomes hidden retry priority.
+The Android Activity calls the native foreground transition in `onStart()` and the background transition in `onStop()`. Transport-bearing lost-ack probe commands are deferred until after `onStart()`, and the JNI boundary independently refuses those commands while the native gate is closed.
 
 No daemon, Android foreground service, WorkManager job, alarm or background scheduler is required for correctness.
 
@@ -542,15 +491,15 @@ The deterministic Rust suite now covers, among other cases:
 2. network failure after durable staging;
 3. remote acceptance followed by response loss;
 4. inbound trusted-state/cursor persistence failure;
-5. single-publication reconciliation persistence failure;
-6. multiple simultaneous outbox entries at the recovery layer;
+5. reconciliation persistence failure;
+6. multiple simultaneous outbox entries;
 7. stale-entry replacement with a fresh `PublicationId`;
 8. failed stale replacement preserving old state;
 9. foreground/background transport blocking;
 10. backgrounding during a remotely accepted in-flight mutation;
 11. outbound semantic handoff + durable exposure/outbox atomicity;
 12. unfinalized local dependency rejected before outbound protection;
-13. deterministic local scalar recovery encode/decode validation;
+13. deterministic scalar and multi-domain recovery encode/decode validation;
 14. real encrypted outbound filesystem restart;
 15. authenticated inbound dirty observation preserving true concurrency;
 16. failed inbound semantic persistence leaving live dirty state and old cursor unchanged;
@@ -558,26 +507,32 @@ The deterministic Rust suite now covers, among other cases:
 18. GitHub cursor round-trip with no ordering semantics;
 19. lost-ACK authenticated rediscovery with no second publish;
 20. failed lost-ACK reconciliation durability barrier preserving pending outbox;
-21. one bounded single-publication post-conflict catch-up ending at explicit `NeedsRebase`;
+21. bounded post-conflict catch-up ending at explicit `NeedsRebase`;
 22. same-cursor publication set sent in one exact-byte transport mutation;
 23. mixed-cursor publication set rejected before transport I/O;
 24. batch reconciliation durability failure preserving every selected entry;
-25. set-based runtime publishing several same-cursor pending entries in one mutation without ID priority;
-26. unresolved stale set blocking a newer/current set without implicit cross-generation ordering;
+25. set-based runtime publishing several same-cursor pending entries without ID priority;
+26. unresolved stale set blocking a current set without implicit cross-generation ordering;
 27. authenticated catch-up reconciling an entire stale lost-ACK set without republish;
-28. bounded batch conflict performing exactly one follow-up catch-up and stopping at set `NeedsRebase`;
-29. remote acceptance of a batch followed by local reconciliation failure and later authenticated set recovery with no second publish;
+28. bounded batch conflict performing exactly one follow-up catch-up;
+29. remote batch acceptance followed by failed local reconciliation and later authenticated set recovery with no second publish;
 30. complete multipart catch-up with reversed part order and one semantic observation boundary;
 31. a complete publication beside an incomplete multipart publication causing no semantic mutation or cursor advance;
 32. interleaved complete multipart publications remaining independent of `PublicationId` ordering;
 33. identical duplicate multipart part delivery while pending remaining harmless;
-34. authenticated conflicting duplicate multipart part delivery failing closed.
+34. authenticated conflicting duplicate multipart part delivery failing closed;
+35. multi-domain remote observation leaving unrelated dirty domains unsealed;
+36. lifecycle-gated multi-domain recovery across encrypted filesystem restart;
+37. Android-bridge host encrypted recovery probe surviving a real Unix filesystem reopen;
+38. Android-bridge host lost-ack probe durably accepting remotely, losing the response, reopening/reconciling and proving no second publish via a durable publish counter.
 
 ## 15. What remains unproved/unfrozen
 
 The current implementation does not yet prove or freeze:
 
+- actual APK cross-compilation/installation/device execution evidence for the checked-in harness;
 - actual Android handset power-loss behavior;
+- production Android content-key ownership/Keystore integration;
 - final `.apc` storage layout;
 - final complete-continuum local recovery encoding;
 - compact long-lived causal membership/checkpoint representation;
@@ -593,42 +548,44 @@ The current implementation does not yet prove or freeze:
 - persistent transport-observation evidence across a crash between catch-up commit and later outbox reconciliation;
 - very-old transport generation/rebootstrap policy.
 
-The existing `APCLREC1`, `APCSREC1`, `APCSYNC1` and `APCSPRT1` encodings remain development contracts until the actual format freeze.
+The existing `APCLREC1`, `APCLSET1`, `APCSREC1`, `APCSYNC1` and `APCSPRT1` encodings remain development contracts until the actual format freeze.
 
 ## 16. Android validation path
 
-Once the first Android binding exists, the same state machine should be exercised through ADB:
+The Android binding now exists; the next evidence step is to run it rather than redesign the state machine:
 
 ```text
-Rust unit/property tests
+Rust unit/property tests                       ✓
         |
-Unix filesystem restart tests
+Unix filesystem restart tests                 ✓
         |
-subprocess SIGKILL tests
+JNI + minimal Android harness checked in      ✓
         |
-Android process kill
+NDK build + APK install on real handset       pending
         |
-kill during outbound transfer
+stage -> am force-stop -> verify              pending
         |
-kill after remote acceptance / before ACK handling
+lost-ack-stage -> force-stop -> resume        pending
         |
-kill after authenticated inbound observation / before durable commit
+kill-point matrix during sync transitions     pending
         |
-relaunch + invariant verification
-        |
-controlled device power-cycle tests
+controlled device power-cycle tests           later, separate campaign
 ```
 
-The oracle must inspect semantic state, working epoch, finalization/exposure bookkeeping, cursor and outbox — not merely whether the app opens.
+`adb shell am force-stop` is process-death evidence, not sudden power-loss evidence. It must not be used as a substitute for a physical power-loss campaign.
+
+The oracle must inspect semantic state, working epoch, finalization/exposure bookkeeping, cursor and outbox — not merely whether the app opens. The lost-ack harness additionally requires that the simulated remote durable publish count remain exactly one after recovery.
 
 ## 17. Immediate next implementation work
 
 The next durability-oriented slices should:
 
-1. harden multipart fetched-range replay/duplication behavior and transport-range assumptions without persisting partial semantic visibility;
-2. add repeated multi-publication conflict/rebase-chain and fetch-failure adversarial tests;
-3. introduce a complete local trusted-state container abstraction for several independent merge domains without smuggling in cross-domain transaction semantics;
-4. keep stale-set semantic re-export above the transport/session layer and require a fresh `PublicationId` for every replacement;
-5. later reproduce the current outbound/inbound restart matrix through Android process-kill and power-cycle tests.
+1. build the JNI bridge for `aarch64-linux-android`, assemble/install the minimal APK and run the lifecycle probe on a real device;
+2. run the basic encrypted recovery `stage -> force-stop -> verify` path and preserve the result;
+3. run the lost-ack `stage -> force-stop -> resume` path and require authenticated reconciliation with no second publish;
+4. expand the Android harness into a bounded kill-point matrix around local staging, remote acceptance, authenticated catch-up and local reconciliation;
+5. once the device process-death path is stable, bind the real GitHub HTTP/GraphQL transport and its credentials behind the existing opaque transport seam;
+6. integrate Android hardware-backed key wrapping as local platform policy without making it portable core semantics;
+7. keep real device power-loss testing separate from process-death testing and do not claim the stronger durability guarantee until that campaign exists.
 
 The responsibility split remains simple: semantic state decides meaning, crypto decides confidentiality/authenticity, durability decides what survives restart, lifecycle decides whether new transport I/O may begin, runtime composes those boundaries, and transport only moves opaque authenticated objects.
