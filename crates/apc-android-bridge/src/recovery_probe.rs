@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use apc_core::{AtomId, ContinuumId, LocalScalarDomain, RevisionId, ScalarRegister, WorkingEpochId};
+use apc_core::{
+    AtomId, ContinuumId, LocalScalarDomain, RevisionId, ScalarRegister, WorkingEpochId,
+};
 use apc_crypto::ContentKey;
 use apc_runtime::{
     prepare_recovery_handoff, stage_prepared_recovery_handoff,
