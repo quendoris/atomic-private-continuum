@@ -13,13 +13,14 @@ public final class MainActivity extends Activity {
     private TextView status;
     private boolean gateBeforeOnStart;
     private String probeResult = "not requested";
+    private String pendingForegroundProbe;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         gateBeforeOnStart = NativeBridge.isForeground();
-        runRequestedProbe();
+        prepareRequestedProbe();
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -50,6 +51,7 @@ public final class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         NativeBridge.enterForeground();
+        runForegroundProbeIfRequested();
         render("onStart → foreground");
     }
 
@@ -60,7 +62,7 @@ public final class MainActivity extends Activity {
         super.onStop();
     }
 
-    private void runRequestedProbe() {
+    private void prepareRequestedProbe() {
         String command = getIntent().getStringExtra("apc_probe");
         if (command == null) {
             return;
@@ -74,8 +76,34 @@ public final class MainActivity extends Activity {
             case "verify":
                 probeResult = NativeBridge.verifyRecoveryProbe(filesDir);
                 break;
+            case "lost-ack-stage":
+            case "lost-ack-resume":
+                pendingForegroundProbe = command;
+                probeResult = "pending Android foreground: " + command;
+                break;
             default:
                 probeResult = "FAIL unknown apc_probe command: " + command;
+                break;
+        }
+    }
+
+    private void runForegroundProbeIfRequested() {
+        if (pendingForegroundProbe == null) {
+            return;
+        }
+
+        String command = pendingForegroundProbe;
+        pendingForegroundProbe = null;
+        String filesDir = getFilesDir().getAbsolutePath();
+        switch (command) {
+            case "lost-ack-stage":
+                probeResult = NativeBridge.stageLostAckProbe(filesDir);
+                break;
+            case "lost-ack-resume":
+                probeResult = NativeBridge.resumeLostAckProbe(filesDir);
+                break;
+            default:
+                probeResult = "FAIL unexpected foreground probe: " + command;
                 break;
         }
     }
