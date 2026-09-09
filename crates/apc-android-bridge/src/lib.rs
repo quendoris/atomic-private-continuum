@@ -63,10 +63,7 @@ fn probe_result_string(env: &JNIEnv<'_>, result: Result<String, String>) -> jstr
     }
 }
 
-fn foreground_probe_path(
-    env: &mut JNIEnv<'_>,
-    files_dir: &JString<'_>,
-) -> Result<PathBuf, String> {
+fn foreground_probe_path(env: &mut JNIEnv<'_>, files_dir: &JString<'_>) -> Result<PathBuf, String> {
     if !is_foreground() {
         return Err("transport recovery probe refused before Android foreground entry".to_owned());
     }
